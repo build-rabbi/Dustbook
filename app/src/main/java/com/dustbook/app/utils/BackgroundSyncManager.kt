@@ -73,28 +73,24 @@ object BackgroundSyncManager {
 
     // -------------------------------------------------------- steps
 
+    /** How long to wait between rounds of the same step. */
+    private const val ROUND_GAP_MS = 12_000L
+
+    /** A step gives up after this many rounds rather than stalling forever. */
+    private const val MAX_ROUNDS = 18
+
     private fun step1NewPosts(context: Context, p: Prefs) {
         currentStep = "posts-10"
         val target = 10
-        val existingIds = OfflineFeed.knownIds(OfflineFeed.SECTION_FEED).toSet()
-
-        OfflineSync.run(context, OfflineFeed.SECTION_FEED, target,
-            includeVideo = true, force = true) { count ->
-            // Even if sync returned fewer, whatever it found is stored.
-            // Move to step 2.
+        runUntilTarget(context, p, OfflineFeed.SECTION_FEED, target, "posts-10") {
             step2Reels(context, p)
         }
     }
 
     private fun step2Reels(context: Context, p: Prefs) {
-        currentStep = "reels"
         // Exactly what the user asked for — never raised, never lowered.
         val target = p.offlineReelTarget
-        val existingIds = OfflineFeed.knownIds(OfflineFeed.SECTION_REELS).toSet()
-
-        OfflineSync.run(context, OfflineFeed.SECTION_REELS, target,
-            includeVideo = true, force = true) { count ->
-            // Wait for the video download queue to drain before proceeding.
+        runUntilTarget(context, p, OfflineFeed.SECTION_REELS, target, "reels") {
             step3WaitForVideo(context, p)
         }
     }
@@ -111,9 +107,8 @@ object BackgroundSyncManager {
 
     private fun step4MorePosts(context: Context, p: Prefs) {
         currentStep = "posts-300"
-        // 300 more posts — never raised, never lowered.
-        OfflineSync.run(context, OfflineFeed.SECTION_FEED, 300,
-            includeVideo = true, force = true) { count ->
+        val target = 300
+        runUntilTarget(context, p, OfflineFeed.SECTION_FEED, target, "posts-300") {
             // Posts done; stories go last.
             step5Stories(context, p)
         }
@@ -127,5 +122,54 @@ object BackgroundSyncManager {
             currentStep = "done"
             isRunning = false
         }
+    }
+
+    /**
+     * Run one step until its target is actually met, then hand over.
+     *
+     * A single capture pass stops when the page stops producing new cards,
+     * which is usually short of the target — the first pass over reels might
+     * store a dozen of the thirty asked for. The old code took whatever one
+     * pass returned and moved on, silently lowering every amount. This keeps
+     * re-running the same step until the fully-downloaded count reaches the
+     * target (or the round budget runs out), and only then calls [onDone].
+     *
+     * Steps never overlap: the next step starts only when this one has
+     * finished, so posts are never downloaded while reels are, and reels are
+     * never downloaded while the 300-post pass is running.
+     */
+    private fun runUntilTarget(
+        context: Context,
+        p: Prefs,
+        section: String,
+        target: Int,
+        stepName: String,
+        onDone: () -> Unit
+    ) {
+        currentStep = stepName
+        if (OfflineFeed.realPlayableCount(section) >= target) {
+            onDone()
+            return
+        }
+        var attempts = 0
+        fun round() {
+            attempts++
+            OfflineSync.run(context, section, target,
+                includeVideo = true, force = true) { _ ->
+                if (OfflineFeed.realPlayableCount(section) >= target ||
+                    attempts >= MAX_ROUNDS
+                ) {
+                    onDone()
+                } else {
+                    // A short pause lets the download pool finish and the
+                    // page settle before the next round of the same step.
+                    AppExecutors.background.execute {
+                        try { Thread.sleep(ROUND_GAP_MS) } catch (_: InterruptedException) {}
+                        android.os.Handler(android.os.Looper.getMainLooper()).post { round() }
+                    }
+                }
+            }
+        }
+        round()
     }
 }

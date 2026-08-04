@@ -21,6 +21,10 @@ package com.dustbook.app.utils
  *    page, so it cannot appear online
  *  - the container is marked `data-db-offline`; a second pass sees the marker
  *    and stops, so nothing is ever added twice
+ *  - the stored document brings its own copy of the first page and the grey
+ *    placeholders Facebook's JS would have filled; both are removed before the
+ *    saved cards are appended, so the same posts never appear twice and the
+ *    saved cards are the feed rather than an unreachable tail
  *  - the placeholders it replaces are removed in the same operation, so the
  *    grey blocks and the real posts cannot both be on screen
  */
@@ -71,14 +75,47 @@ object OfflineInject {
             return t.length === 0;
           }
 
+          /**
+           * Page furniture that must survive the cleanup: the composer, the
+           * tab bar, section headers and dividers. Everything else in the
+           * feed container is either a placeholder or a story card — and the
+           * story cards are already in the store, so keeping them would show
+           * the same posts twice.
+           */
+          function isChrome(el) {
+            if (!el || el.nodeType !== 1) return true;
+            if (el.querySelector('input,textarea,[role="textbox"]')) return true;
+            var label = (el.getAttribute('aria-label') || '').toLowerCase();
+            if (/^(home|reels|watch|notifications|menu|profile|search|create|messages|marketplace|friends|groups|gaming)$/i.test(label)) return true;
+            if (el.getAttribute('data-mcomponent') === 'MContainer' && label) return true;
+            var low = (el.innerText || el.textContent || '')
+              .replace(/\s+/g, ' ').trim().toLowerCase();
+            if (low.indexOf("what's on your mind") >= 0) return true;
+            if (low.indexOf('what is on your mind') >= 0) return true;
+            if (low.indexOf('create room') >= 0) return true;
+            if (/^(see more|see all|view more|show more|load more)$/i.test(low)) return true;
+            return false;
+          }
+
           function inject() {
             var box = feedContainer();
             if (!box || box.getAttribute('data-db-offline')) return;
             box.setAttribute('data-db-offline', '1');
 
+            // The stored document carries its own copy of the first page —
+            // the same cards the capture saved — plus the grey placeholders
+            // Facebook's JS would have filled online. Left in place, the
+            // saved cards are appended after them and, on a virtualized
+            // scroller, out of reach: a feed that shows a handful of posts
+            // instead of the hundreds that were saved. Clear the document's
+            // own cards and placeholders (keeping the chrome), then append
+            // the stored cards, so what was saved is what is on screen.
+            // document.body is only a fallback container; never clear it.
             var kids = Array.prototype.slice.call(box.children);
             for (var i = 0; i < kids.length; i++) {
-              if (isPlaceholder(kids[i])) {
+              if (box !== document.body && !isChrome(kids[i])) {
+                try { kids[i].parentNode.removeChild(kids[i]); } catch (e) {}
+              } else if (box === document.body && isPlaceholder(kids[i])) {
                 try { kids[i].parentNode.removeChild(kids[i]); } catch (e) {}
               }
             }
@@ -87,6 +124,12 @@ object OfflineInject {
             holder.setAttribute('data-db-cards', '1');
             holder.innerHTML = CARDS;
             box.appendChild(holder);
+
+            // A scroller frozen by the live layout (fixed height, hidden
+            // overflow) would keep the appended cards out of reach offline.
+            // Let the content size it instead.
+            box.style.height = 'auto';
+            box.style.overflow = 'visible';
 
             doResume(box);
           }

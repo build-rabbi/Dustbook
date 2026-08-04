@@ -31,6 +31,15 @@ function ok(name, cond, extra) {
   else { fail++; console.log('  FAIL ' + name + (extra ? ' :: ' + extra : '')); }
 }
 
+/** The Kotlin raw-string body of a script, as the app would serve it. */
+function raw(file, marker) {
+  const src = fs.readFileSync(file, 'utf8');
+  const i = src.indexOf(marker);
+  const start = src.indexOf('"""', i) + 3;
+  const end = src.indexOf('"""', start);
+  return src.slice(start, end);
+}
+
 const cache = fs.readFileSync(KT('utils/OfflineCache.kt'), 'utf8');
 const docs  = fs.readFileSync(KT('utils/OfflineDocs.kt'), 'utf8');
 const main  = fs.readFileSync(KT('ui/MainActivity.kt'), 'utf8');
@@ -637,6 +646,32 @@ console.log('\nThe pipeline runs in the order it documents');
   ok('then 300 posts, then stories last',
      /step3WaitForVideo[\s\S]{0,600}step4MorePosts\(context, p\)/.test(bsm) &&
      /step4MorePosts[\s\S]{0,600}step5Stories\(context, p\)/.test(bsm));
+
+  // A single capture pass ends when the page stops producing new cards,
+  // which is usually short of the target. The steps therefore run in rounds
+  // until the fully-downloaded count actually reaches the target, and only
+  // then hand over — otherwise "keep 30 reels" saved a dozen and moved on.
+  ok('each step loops until its target is met',
+     /private fun runUntilTarget/.test(bsm) &&
+     /OfflineFeed\.realPlayableCount\(section\) >= target/.test(bsm));
+  ok('reels run until exactly the user\'s count',
+     /runUntilTarget\(context, p, OfflineFeed\.SECTION_REELS, target, "reels"\)/.test(bsm));
+  ok('the 300-post pass runs until 300 are stored',
+     /runUntilTarget\(context, p, OfflineFeed\.SECTION_FEED, target, "posts-300"\)/.test(bsm));
+  ok('a step never starts before the previous one finished',
+     !/OfflineSync\.run\(context, OfflineFeed\.SECTION_FEED,[\s\S]{0,40}OfflineSync\.run\(context, OfflineFeed\.SECTION_REELS/.test(bsm));
+}
+
+console.log('\nPosts pause while reels are being downloaded');
+{
+  const ma = fs.readFileSync(KT('ui/MainActivity.kt'), 'utf8');
+  // The visible WebView also captures what the user scrolls past. While the
+  // pipeline is on its reels step, feed posts from browsing must not start
+  // downloading in parallel — the flow is strictly sequential.
+  ok('live feed capture is skipped during the reels step',
+     /section == OfflineFeed\.SECTION_FEED && BackgroundSyncManager\.isRunning/.test(ma) &&
+     /BackgroundSyncManager\.currentStep == "reels"/.test(ma) &&
+     /BackgroundSyncManager\.currentStep == "wait-video"/.test(ma));
 }
 
 console.log('\nSaved images survive to the offline page');
@@ -791,6 +826,63 @@ console.log('\nEvery saved card reaches the page');
   ok('pull to refresh is on by default',
      /KEY_PULL_REFRESH, true\)/.test(prefs) &&
      /android:key="pull_to_refresh"[\s\S]{0,120}android:defaultValue="true"/.test(xml));
+}
+
+console.log('\nThe stored document cannot hide the saved cards');
+{
+  const inj = fs.readFileSync(KT('utils/OfflineInject.kt'), 'utf8');
+  // Reported: settings shows 100+ posts saved, but the offline home feed
+  // shows only the handful the stored document itself carries. The document
+  // brings its own copy of the first page; the saved cards were appended
+  // after it and, on a virtualized scroller, out of reach.
+  ok('the document\'s own cards and placeholders are cleared before appending',
+     /!isChrome\(kids\[i\]\)/.test(inj) &&
+     /box\.appendChild\(holder\)/.test(inj));
+  ok('chrome is recognised and kept',
+     /function isChrome\(el\)/.test(inj) &&
+     /role="textbox"\]/.test(inj));
+  ok('a frozen scroller cannot keep the cards out of reach',
+     /box\.style\.height = 'auto'/.test(inj) &&
+     /box\.style\.overflow = 'visible'/.test(inj));
+}
+
+console.log('\nEvery saved card is on the offline page');
+{
+  // Behaviour, not shape: a stored document with its own posts, placeholders
+  // and chrome goes through the injector; only the saved cards may remain as
+  // feed content, and all of them must be there.
+  const cards = [];
+  for (let i = 1; i <= 40; i++) {
+    cards.push('<div class="card" data-tracking-duration-id="c' + i + '">' +
+               '<span>saved post ' + i + '</span></div>');
+  }
+  const injectSrc = raw(KT('utils/OfflineInject.kt'), 'fun script(')
+    .replace('$cards', cards.join('\n'));
+
+  const dom = new JSDOM(
+    `<body>
+       <div data-type="vscroller">
+         <div class="composer"><div role="textbox">What's on your mind?</div></div>
+         <div class="placeholder" style="height:80px"></div>
+         <div class="docpost" data-tracking-duration-id="old1">
+           <img src="https://scontent.fbcdn.net/x.jpg"><span>document post 1</span></div>
+         <div class="docpost" data-tracking-duration-id="old2">
+           <span>document post 2</span></div>
+       </div>
+     </body>`,
+    { runScripts: 'outside-only', url: 'https://m.facebook.com/' });
+
+  dom.window.eval(injectSrc);
+
+  const scroller = dom.window.document.querySelector('[data-type="vscroller"]');
+  const saved = scroller.querySelectorAll('.card');
+  ok('all saved cards are injected', saved.length === 40, String(saved.length));
+  ok('the document\'s own posts are not duplicated',
+     scroller.querySelectorAll('.docpost').length === 0);
+  ok('placeholders are gone', scroller.querySelectorAll('.placeholder').length === 0);
+  ok('the composer chrome is kept', !!scroller.querySelector('.composer'));
+  ok('the scroller is not frozen', scroller.style.height === 'auto' &&
+     scroller.style.overflow === 'visible');
 }
 
 console.log('\nNo app-promo bar flashes on an offline page');

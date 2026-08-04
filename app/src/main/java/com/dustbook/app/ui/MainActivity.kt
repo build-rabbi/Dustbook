@@ -2023,6 +2023,13 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun onOfflineItems(section: String, json: String, done: Boolean) {
             if (!prefs.offlineMode || !isOnline) return
+            // The pipeline runs strictly in sequence: while reels are being
+            // downloaded, feed posts must not be captured or downloaded
+            // alongside them. The post passes resume only after reels are
+            // done (posts-300) — this is the owner's flow, never swapped.
+            if (section == OfflineFeed.SECTION_FEED && BackgroundSyncManager.isRunning &&
+                (BackgroundSyncManager.currentStep == "reels" ||
+                 BackgroundSyncManager.currentStep == "wait-video")) return
             val target = prefs.offlineReelTarget.coerceAtLeast(30)
             val items = OfflineSync.parseItems(json)
             if (items.isEmpty()) return
