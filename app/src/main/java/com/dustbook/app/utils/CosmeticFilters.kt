@@ -114,10 +114,42 @@ object CosmeticFilters {
               var RULES = [$list];
               var TAG = 'data-db-hidden';
 
+              // Comment content is never a rule target. Facebook's own lists
+              // carry rules shaped like "the rounded card inside the card"
+              // (their ad units and their comment cards share the same
+              // border-radius shell), and those rules have repeatedly taken
+              // the whole comment thread with them on the post page. Whatever
+              // a rule matches, comment items, comment sections and anything
+              // inside them are untouchable.
+              function isCommentZone(el) {
+                if (!el || el.nodeType !== 1 || !el.getAttribute) return false;
+                var a = (el.getAttribute('data-sigil') || '').toLowerCase();
+                if (a.indexOf('comment') !== -1) return true;
+                a = (el.getAttribute('data-testid') || '').toLowerCase();
+                if (a.indexOf('comment') !== -1) return true;
+                a = (el.getAttribute('data-pagelet') || '').toLowerCase();
+                if (a.indexOf('comment') !== -1) return true;
+                a = (el.getAttribute('aria-label') || '').toLowerCase();
+                if (a === 'comment' || a === 'comments' ||
+                    a.indexOf('comment section') !== -1 ||
+                    a.indexOf('comments on') !== -1) return true;
+                return false;
+              }
+
+              function insideComments(el) {
+                var n = el;
+                for (var i = 0; i < 10 && n; i++) {
+                  if (isCommentZone(n)) return true;
+                  n = n.parentElement;
+                }
+                return false;
+              }
+
               function hide(el) {
                 if (!el || el.nodeType !== 1) return;
                 var t = el.tagName;
                 if (t === 'HTML' || t === 'BODY' || t === 'HEAD') return;
+                if (isCommentZone(el) || insideComments(el)) return;
                 if (el.hasAttribute(TAG)) return;
                 el.setAttribute(TAG, '1');
                 el.style.setProperty('display', 'none', 'important');

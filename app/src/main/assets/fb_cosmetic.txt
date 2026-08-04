@@ -1,5 +1,8 @@
 ! Dustbook filter set - Facebook cosmetic rules
 ! Sourced from uBlock Origin, AdGuard Base, AdGuard Social, AdGuard Annoyances
+! article > .story_body_container + div[class]  -- REMOVED (issue #1)
+!   "the sibling after the story body" is the comments container on the post
+!   page; this rule removed the whole thread.
 [plain]
 #contentCol > div > div > div[class="_5hn6"][style]
 #fbVideoStreamingReactionsTray
@@ -50,7 +53,10 @@ div[data-type="vscroller"] > div[style^="margin-top:"][style*="px; height:35px; 
 div[data-type="vscroller"] > div[style^="margin-top:"][style*="px; height:35px; z-index:0; width:"] + div[data-tti-phase] + div[data-tti-phase][data-actual-height="2"]
 div[data-type="vscroller"] > div[style^="margin-top:"][style*="px; height:35px; z-index:0; width:"] + div[data-tti-phase] + div[data-tti-phase][data-actual-height="2"] + div[data-tti-phase]
 div[id^="div-gpt-ad"]
-div[role="feed"] div[style="border-radius: max(0px, min(8px, ((100vw - 4px) - 100%) * 9999)) / 8px;"] div[style="border-radius: max(0px, min(8px, ((100vw - 4px) - 100%) * 9999)) / 8px;"]
+! div[role="feed"] div[style="border-radius: ..."] div[style="border-radius: ..."]
+!   -- REMOVED (issue #1). "the rounded card nested inside the rounded card"
+!   is exactly how Facebook draws comment cards inside a feed post; this rule
+!   removed every inline comment on the feed.
 div[role="main"] div[data-pagelet="VideoChatHomeUnit"]
 div[role="progressbar"] ~ div[class] div div[data-instancekey] > div[data-visualcompletion="ignore"] a[aria-label][href*="l.php?u="][target="_blank"]
 ins.adsbygoogle
@@ -102,6 +108,8 @@ div[role="complementary"] > div[class] > div[class] > div[class] span > div > di
 div[role="complementary"] div:not([class]) div[data-visualcompletion="ignore-dynamic"] > div[class] > a[aria-labelledby][attributionsrc^="/privacy_sandbox/comet/register/source/?eid="][href^="http"][target="_blank"]
 div[role="complementary"] div:not([class]):not([id]) > span:not([class]):not([id]):not([aria-labelledby])
 div[role="main"] ~ div[data-nosnippet]:has(a[aria-label="Accessible login button"])
-div[role="region"] + div[role="main"] div[role="article"] div[style="border-radius: max(0px, min(8px, ((100vw - 4px) - 100%) * 9999)) / 8px;"] > div[class]:not([class*=" "])
+! div[role="region"] + div[role="main"] div[role="article"] div[style="border-radius: ..."] > div[class]:not([class*=" "])
+!   -- REMOVED (issue #1). On the post page the article holds the comment
+!   cards, which use the same border-radius shell; this rule hid their bodies.
 div[style="max-width: 390px; min-width: 190px;"]:has(a[href^="/ads/"])
 strong > a[href*="facebook.com"][href*="/shop/?ref"]:not([href*="l.php"])

@@ -87,7 +87,7 @@
 
     <string name="pref_version">Version</string>
     <string name="pref_gesture">Open this screen</string>
-    <string name="pref_gesture_sum">Three finger double tap anywhere on the main screen</string>
+    <string name="pref_gesture_sum">Three finger double tap or three finger long press anywhere on the main screen</string>
     <string name="cat_home">Home page sections</string>
     <string name="pref_filters">Filter lists</string>
     <string name="filters_fmt">%1$s domains from AdGuard, EasyList, EasyPrivacy and uBlock Origin</string>

@@ -128,21 +128,25 @@ version without uninstalling.
 **There is no settings icon anywhere in the app.** This is deliberate: the
 interface should be Facebook's, not a wrapper's.
 
-### Put three fingers on the screen and double-tap
+### Put three fingers on the screen and double-tap — or hold them still
+
+Two gestures open this screen. Either one works.
 
 <table>
-<tr><td><b>Gesture</b></td><td>Three fingers down, tap twice</td></tr>
+<tr><td><b>Gesture</b></td><td>Three fingers down, tap twice <i>or</i> three fingers down, hold still</td></tr>
 <tr><td><b>Where</b></td><td>Anywhere on the main screen — over the feed, over a video, over anything</td></tr>
-<tr><td><b>Timing</b></td><td>Each tap under 500 ms; both taps within 900 ms of each other</td></tr>
+<tr><td><b>Double tap timing</b></td><td>Each tap under 700 ms (measured until the first finger lifts); both taps within 900 ms of each other</td></tr>
+<tr><td><b>Long press</b></td><td>Hold all three fingers still for about 0.8 s</td></tr>
 <tr><td><b>Movement</b></td><td>Keep your fingers still — a drag is read as a scroll, not a tap</td></tr>
 </table>
 
 A short vibration confirms it worked (this can be turned off later under
 *Browsing → Haptic feedback*).
 
-**If it does not open,** you are most likely tapping too slowly or moving
-slightly. Rest three fingertips on the glass and tap twice quickly, like a
-double-click.
+The long press exists because some phones' system gestures swallow multi-touch
+taps (three-finger screenshot and similar), which made the double tap
+impossible to land on those devices. If the double tap does not open, just hold
+the three fingers still for a moment instead.
 
 The detector only *watches* touch events and never consumes them, so scrolling,
 tapping and long-pressing are completely unaffected by it.

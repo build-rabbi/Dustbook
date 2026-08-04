@@ -470,6 +470,9 @@ class MainActivity : AppCompatActivity() {
      * bootstrap, which is the difference between an app and a browser tab.
      */
     override fun onDestroy() {
+        // A long-press timer still pending would otherwise fire after the
+        // activity is gone and try to open settings on a dead screen.
+        if (::gestureDetector.isInitialized) gestureDetector.detach()
         connectivityCallback?.let {
             try {
                 (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)

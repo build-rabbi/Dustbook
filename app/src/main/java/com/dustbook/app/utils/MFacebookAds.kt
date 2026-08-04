@@ -42,9 +42,86 @@ object MFacebookAds {
                 '[data-sigil*="AdStory"]'
               ].join(',');
 
+              // Comment content is untouchable. On the post page the comment
+              // thread is its own vscroller child, and a sponsored unit
+              // sitting inside the thread used to make cardOf climb up to
+              // that child and remove every comment with it - the "comments
+              // show for a second and then disappear" report. A marker found
+              // inside a comment thread now yields only the marker itself,
+              // never the thread.
+              function isCommentZone(el) {
+                if (!el || !el.getAttribute) return false;
+                var a = (el.getAttribute('data-sigil') || '').toLowerCase();
+                if (a.indexOf('comment') !== -1) return true;
+                a = (el.getAttribute('data-testid') || '').toLowerCase();
+                if (a.indexOf('comment') !== -1) return true;
+                a = (el.getAttribute('data-pagelet') || '').toLowerCase();
+                if (a.indexOf('comment') !== -1) return true;
+                a = (el.getAttribute('aria-label') || '').toLowerCase();
+                if (a === 'comment' || a === 'comments' ||
+                    a.indexOf('comment section') !== -1 ||
+                    a.indexOf('comments on') !== -1) return true;
+                return false;
+              }
+
+              function insideComments(el) {
+                var n = el;
+                for (var i = 0; i < 10 && n; i++) {
+                  if (isCommentZone(n)) return true;
+                  n = n.parentElement;
+                }
+                return false;
+              }
+
+              // A vscroller child that holds a comment thread rather than a
+              // single story card. The thread container itself carries no
+              // comment marker - its comment items do - so it has to be
+              // recognised by its content: direct children that are comment
+              // items. A feed card may carry one inline comment preview, so
+              // the card is only treated as a thread when it is not itself
+              // carrying ad identity (data-dcm-id, a sponsored marker).
+              function isCommentThreadContainer(el) {
+                if (!el || !el.children) return false;
+                var kids = el.children;
+                var n = kids.length;
+                var commentKids = 0;
+                for (var i = 0; i < n; i++) {
+                  var a = (kids[i].getAttribute && kids[i].getAttribute('data-sigil')) || '';
+                  if (a.toLowerCase().indexOf('comment') !== -1) { commentKids++; continue; }
+                  var t = (kids[i].getAttribute && kids[i].getAttribute('data-testid')) || '';
+                  if (t.toLowerCase().indexOf('comment') !== -1) commentKids++;
+                }
+                if (commentKids < 1) return false;
+                // A feed card shows at most one inline comment preview and
+                // carries its own ad identity; a thread wrapper carries
+                // several comment items and no ad identity.
+                if (commentKids === 1 && n > 3) return false;
+                if (el.hasAttribute('data-dcm-id')) return false;
+                var tt = (el.getAttribute('data-testid') || '').toLowerCase();
+                if (tt.indexOf('sponsored') !== -1) return false;
+                if ((el.getAttribute('data-sigil') || '').indexOf('AdStory') !== -1) return false;
+                return true;
+              }
+
+              // The ad unit containing el, stopping before [stop] and before
+              // any comment item. Used when a thread must survive: only the
+              // unit between the comments is removed.
+              function adUnitOf(el, stop) {
+                var n = el;
+                while (n && n.parentElement && n.parentElement !== stop) {
+                  if (isCommentZone(n.parentElement)) break;
+                  n = n.parentElement;
+                }
+                return n;
+              }
+
               /**
                * The story card containing el: the nearest ancestor that is a
                * direct child of the feed scroller.
+               *
+               * When the climb passes through a comment thread the marker is
+               * inside the comments, not in a feed card; returning the
+               * original element hides just the unit itself.
                */
               function cardOf(el) {
                 var scroller = el.closest('[data-type="vscroller"]');
@@ -57,11 +134,18 @@ object MFacebookAds {
 
                 var n = el;
                 while (n && n.parentElement && n.parentElement !== scroller) {
+                  if (isCommentZone(n.parentElement)) return el;
                   n = n.parentElement;
                   if (n === document.body) return null;
                 }
                 // n is now a direct child of the scroller, or null.
-                return (n && n.parentElement === scroller) ? n : null;
+                var card = (n && n.parentElement === scroller) ? n : null;
+                if (card && card !== el && isCommentThreadContainer(card)) {
+                  // The vscroller child is the comment thread, not the ad.
+                  // Remove only the ad unit inside it.
+                  return adUnitOf(el, card);
+                }
+                return card;
               }
 
               function hide(el) {
@@ -72,6 +156,7 @@ object MFacebookAds {
                 // Never remove the scroller itself.
                 if (el.getAttribute('data-type') === 'vscroller') return;
                 if (el.getAttribute('data-mcomponent') === 'MScreen') return;
+                if (isCommentZone(el) || insideComments(el)) return;
                 el.setAttribute(TAG, '1');
                 el.style.setProperty('display', 'none', 'important');
               }

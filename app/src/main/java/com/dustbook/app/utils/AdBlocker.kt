@@ -358,8 +358,68 @@ object AdBlocker {
               var PROTECT = {HTML:1,HEAD:1,BODY:1,SCRIPT:1,STYLE:1,MAIN:1};
               var busy = false;
 
+              // Comment content is untouchable. Facebook's ad units and its
+              // comment cards share the same rounded-card shell, so the
+              // heuristics below (and the published rules above) have
+              // repeatedly matched a comment thread and removed it whole -
+              // the "comments vanish a second after they load" report. Any
+              // node that is a comment item, a comment section, or lives
+              // inside one is refused, whatever matched it.
+              function isCommentZone(el) {
+                if (!el || !el.getAttribute) return false;
+                var a = (el.getAttribute('data-sigil') || '').toLowerCase();
+                if (a.indexOf('comment') !== -1) return true;
+                a = (el.getAttribute('data-testid') || '').toLowerCase();
+                if (a.indexOf('comment') !== -1) return true;
+                a = (el.getAttribute('data-pagelet') || '').toLowerCase();
+                if (a.indexOf('comment') !== -1) return true;
+                a = (el.getAttribute('aria-label') || '').toLowerCase();
+                if (a === 'comment' || a === 'comments' ||
+                    a.indexOf('comment section') !== -1 ||
+                    a.indexOf('comments on') !== -1) return true;
+                return false;
+              }
+
+              function insideComments(el) {
+                var n = el;
+                for (var i = 0; i < 10 && n; i++) {
+                  if (isCommentZone(n)) return true;
+                  n = n.parentElement;
+                }
+                return false;
+              }
+
+              // A node that is a comment thread rather than a single card:
+              // direct children include comment items, and the node carries
+              // no ad identity of its own. A feed card with one inline
+              // comment preview is NOT a thread (it has data-dcm-id or a
+              // sponsored marker), so feed ads keep being removed whole.
+              function isCommentThreadContainer(el) {
+                if (!el || !el.children) return false;
+                var kids = el.children;
+                var n = kids.length;
+                var commentKids = 0;
+                for (var i = 0; i < n; i++) {
+                  var a = (kids[i].getAttribute && kids[i].getAttribute('data-sigil')) || '';
+                  if (a.toLowerCase().indexOf('comment') !== -1) { commentKids++; continue; }
+                  var t = (kids[i].getAttribute && kids[i].getAttribute('data-testid')) || '';
+                  if (t.toLowerCase().indexOf('comment') !== -1) commentKids++;
+                }
+                if (commentKids < 1) return false;
+                // A feed card shows at most one inline comment preview and
+                // carries its own ad identity; a thread wrapper carries
+                // several comment items and none.
+                if (commentKids === 1 && n > 3) return false;
+                if (el.hasAttribute('data-dcm-id')) return false;
+                var tt = (el.getAttribute('data-testid') || '').toLowerCase();
+                if (tt.indexOf('sponsored') !== -1) return false;
+                if ((el.getAttribute('data-sigil') || '').indexOf('AdStory') !== -1) return false;
+                return true;
+              }
+
               function hide(el) {
                 if (!el || el.nodeType !== 1 || PROTECT[el.tagName]) return;
+                if (isCommentZone(el) || insideComments(el)) return;
                 if (el.hasAttribute(TAG)) return;
                 el.setAttribute(TAG, '1');
                 el.style.setProperty('display', 'none', 'important');
@@ -513,6 +573,10 @@ object AdBlocker {
                   var p = n.parentElement;
                   if (!p || PROTECT[p.tagName]) break;
                   if (isContainer(p)) break;
+                  // Climbing into a comment thread is exactly the over-reach
+                  // that wiped the comments on the post page. Stop here -
+                  // the node below p (the ad unit) is what gets removed.
+                  if (isCommentZone(p) || isCommentThreadContainer(p)) break;
                   if (isCard(p)) { n = p; break; }
 
                   // Taking p would cover too much of the page: stop here.
@@ -542,6 +606,7 @@ object AdBlocker {
 
                 var target = n || el;
                 if (!target || PROTECT[target.tagName] || isContainer(target)) return;
+                if (isCommentZone(target) || insideComments(target)) return;
                 if (target === document.body || target === document.documentElement) return;
                 if (!target.parentElement) return;
 
