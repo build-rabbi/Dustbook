@@ -630,13 +630,13 @@ console.log('\nThe pipeline runs in the order it documents');
   ok('the V4 ceilings no longer override callers',
      !/coerceAtLeast\(OfflineManager\.V4_FEED_TARGET\)/.test(sync) &&
      !/coerceAtLeast\(OfflineManager\.V4_REEL_TARGET\)/.test(sync));
-  ok('step 1 asks for 50 posts', /val target = 50/.test(bsm));
+  ok('step 1 asks for 10 posts', /val target = 10/.test(bsm));
   ok('and hands over to reels', /step1NewPosts[\s\S]{0,600}step2Reels\(context, p\)/.test(bsm));
   ok('reels use the user\'s chosen count',
      /step2Reels[\s\S]{0,200}p\.offlineReelTarget/.test(bsm));
-  ok('then stories, then more posts',
-     /step3WaitForVideo[\s\S]{0,600}step4Stories\(context, p\)/.test(bsm) &&
-     /step4Stories[\s\S]{0,600}step5MorePosts\(context, p\)/.test(bsm));
+  ok('then 300 posts, then stories last',
+     /step3WaitForVideo[\s\S]{0,600}step4MorePosts\(context, p\)/.test(bsm) &&
+     /step4MorePosts[\s\S]{0,600}step5Stories\(context, p\)/.test(bsm));
 }
 
 console.log('\nSaved images survive to the offline page');

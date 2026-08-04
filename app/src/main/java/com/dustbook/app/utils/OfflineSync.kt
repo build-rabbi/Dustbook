@@ -260,9 +260,12 @@ object OfflineSync {
                     override fun onPageFinished(view: WebView?, url: String?) {
                         view?.evaluateJavascript(MFacebookAds.script(), null)
                         // V4 Step 2: Use higher target + syncMode to fetch fresher content
+                        // Use exactly the requested target: a user who asked
+                        // to keep 30 reels must not be made to page through
+                        // 150 of them.
                         view?.evaluateJavascript(
                             OfflineCapture.script(
-                                target.coerceAtLeast(150),
+                                target,
                                 syncMode = true,
                                 // Skip what is already held, so each pass
                                 // reaches content the user has not seen.

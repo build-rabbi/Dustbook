@@ -37,7 +37,7 @@ object OfflineFeed {
     private val SECTIONS = setOf(SECTION_FEED, SECTION_REELS, SECTION_STORIES)
 
     private const val DIR = "offline_items_v1"
-    private const val MIN_VIDEO_BYTES = 500_000L
+    private const val MIN_VIDEO_BYTES = 50_000L
 
     private val pool = Executors.newFixedThreadPool(3)
     private val busy = AtomicBoolean(false)

@@ -9,11 +9,11 @@ import android.os.Looper
  *
  * Lifecycle:
  *   App opens online → start()
- *     Step 1: Save 50 random unwatched feed posts
+ *     Step 1: Save 10 random unwatched feed posts
  *     Step 2: Save user-configured reel count (only new, not watched)
  *     Step 3: Wait for reel videos to finish downloading
- *     Step 4: Save ALL stories (watched + unwatched)
- *     Step 5: Save 300 more posts
+ *     Step 4: Save 300 more posts
+ *     Step 5: Save ALL stories (watched + unwatched)
  *   User browses online → seen content tracked via bridge + store
  *   App goes offline → saved content displays
  *   App comes back online → clearAll() → start() fresh
@@ -74,8 +74,8 @@ object BackgroundSyncManager {
     // -------------------------------------------------------- steps
 
     private fun step1NewPosts(context: Context, p: Prefs) {
-        currentStep = "posts-50"
-        val target = 50
+        currentStep = "posts-10"
+        val target = 10
         val existingIds = OfflineFeed.knownIds(OfflineFeed.SECTION_FEED).toSet()
 
         OfflineSync.run(context, OfflineFeed.SECTION_FEED, target,
@@ -88,7 +88,8 @@ object BackgroundSyncManager {
 
     private fun step2Reels(context: Context, p: Prefs) {
         currentStep = "reels"
-        val target = p.offlineReelTarget.coerceAtLeast(30)
+        // Exactly what the user asked for — never raised, never lowered.
+        val target = p.offlineReelTarget
         val existingIds = OfflineFeed.knownIds(OfflineFeed.SECTION_REELS).toSet()
 
         OfflineSync.run(context, OfflineFeed.SECTION_REELS, target,
@@ -103,23 +104,25 @@ object BackgroundSyncManager {
         AppExecutors.background.execute {
             // Wait up to 5 minutes for downloads to finish.
             OfflineFeed.awaitPrefetch(300_000)
-            // Now stories.
-            android.os.Handler(android.os.Looper.getMainLooper()).post { step4Stories(context, p) }
+            // Only once the reels actually landed, move on to the 300 posts.
+            android.os.Handler(android.os.Looper.getMainLooper()).post { step4MorePosts(context, p) }
         }
     }
 
-    private fun step4Stories(context: Context, p: Prefs) {
-        currentStep = "stories"
-        // Stories: save ALL, not just unwatched.
-        OfflineSync.run(context, OfflineFeed.SECTION_STORIES, 200,
-            includeVideo = true, force = true) { count ->
-            step5MorePosts(context, p)
-        }
-    }
-
-    private fun step5MorePosts(context: Context, p: Prefs) {
+    private fun step4MorePosts(context: Context, p: Prefs) {
         currentStep = "posts-300"
+        // 300 more posts — never raised, never lowered.
         OfflineSync.run(context, OfflineFeed.SECTION_FEED, 300,
+            includeVideo = true, force = true) { count ->
+            // Posts done; stories go last.
+            step5Stories(context, p)
+        }
+    }
+
+    private fun step5Stories(context: Context, p: Prefs) {
+        currentStep = "stories"
+        // Stories: save ALL, not just unwatched. Always the final step.
+        OfflineSync.run(context, OfflineFeed.SECTION_STORIES, 200,
             includeVideo = true, force = true) { count ->
             currentStep = "done"
             isRunning = false

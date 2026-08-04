@@ -59,10 +59,11 @@ object OfflineManager {
             } catch (_: Exception) {}
         }
 
-        // Step 2: Determine sections to prepare
+        // Step 2: Determine sections to prepare, in the owner's order:
+        // feed first, then reels, stories last.
         val sections = buildList {
-            if (prefs.offlineReels) add(OfflineFeed.SECTION_REELS)
             if (prefs.offlineFeed) add(OfflineFeed.SECTION_FEED)
+            if (prefs.offlineReels) add(OfflineFeed.SECTION_REELS)
             if (prefs.offlineStories) add(OfflineFeed.SECTION_STORIES)
         }
 
@@ -71,8 +72,8 @@ object OfflineManager {
             return
         }
 
-        // V4: Use significantly higher targets
-        val target = calculateV4Target(prefs)
+        // Exactly what the user asked for — never raised.
+        val target = prefs.offlineReelTarget
 
         mainHandler.post {
             OfflineSync.runAll(
@@ -99,26 +100,20 @@ object OfflineManager {
         }
     }
 
-    private fun calculateV4Target(prefs: Prefs): Int {
-        val userTarget = prefs.offlineReelTarget
-        // Always aim high for V4
-        return maxOf(userTarget, V4_REEL_TARGET)
-    }
-
     private fun scheduleLightTopUp(context: Context, prefs: Prefs) {
         mainHandler.postDelayed({
             if (!prefs.offlineMode || !UrlHelper.isLoggedIn()) return@postDelayed
 
             val sections = buildList {
-                if (prefs.offlineReels) add(OfflineFeed.SECTION_REELS)
                 if (prefs.offlineFeed) add(OfflineFeed.SECTION_FEED)
+                if (prefs.offlineReels) add(OfflineFeed.SECTION_REELS)
             }
 
             if (sections.isNotEmpty()) {
                 OfflineSync.runAll(
                     context = context.applicationContext,
                     sections = sections,
-                    target = prefs.offlineReelTarget.coerceAtLeast(100),
+                    target = prefs.offlineReelTarget,
                     includeVideo = prefs.offlineVideo,
                     force = false
                 )
