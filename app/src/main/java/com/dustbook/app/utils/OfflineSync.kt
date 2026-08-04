@@ -137,6 +137,11 @@ object OfflineSync {
         target: Int,
         includeVideo: Boolean,
         force: Boolean = false,
+        // How many items the section store may hold after this pass. Defaults
+        // to [target]; the pipeline raises it for the post steps so a step
+        // can add its fresh items on top of what is already stored without
+        // the store cap silently truncating them.
+        storeLimit: Int? = null,
         onDone: (Int) -> Unit = {}
     ) {
         if (target <= 0) return
@@ -214,7 +219,7 @@ object OfflineSync {
                         }
                         if (newItems.isEmpty()) return
 
-                        OfflineFeed.addItems(sec, newItems, target)
+                        OfflineFeed.addItems(sec, newItems, storeLimit ?: target)
                         OfflineFeed.prefetch(newItems, includeVideo)
                     }
 

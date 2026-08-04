@@ -73,12 +73,6 @@ object BackgroundSyncManager {
 
     // -------------------------------------------------------- steps
 
-    /** How long to wait between rounds of the same step. */
-    private const val ROUND_GAP_MS = 12_000L
-
-    /** A step gives up after this many rounds rather than stalling forever. */
-    private const val MAX_ROUNDS = 18
-
     private fun step1NewPosts(context: Context, p: Prefs) {
         currentStep = "posts-10"
         val target = 10
@@ -125,18 +119,31 @@ object BackgroundSyncManager {
     }
 
     /**
-     * Run one step until its target is actually met, then hand over.
+     * Run one step until its goal is actually met, then hand over.
      *
      * A single capture pass stops when the page stops producing new cards,
-     * which is usually short of the target — the first pass over reels might
+     * which is usually short of the goal — the first pass over reels might
      * store a dozen of the thirty asked for. The old code took whatever one
      * pass returned and moved on, silently lowering every amount. This keeps
-     * re-running the same step until the fully-downloaded count reaches the
-     * target (or the round budget runs out), and only then calls [onDone].
+     * re-running the same step until the fully-downloaded (playable) count
+     * reaches the goal, and only then calls [onDone]. There is no round
+     * budget: an amount that was asked for is an amount that gets saved, and
+     * the next step never starts before this one is complete.
      *
-     * Steps never overlap: the next step starts only when this one has
-     * finished, so posts are never downloaded while reels are, and reels are
-     * never downloaded while the 300-post pass is running.
+     * Goals:
+     *  - reels: the user's keep-count is the goal. The section store is
+     *    capped at exactly that, so "keep 30" means 30 playable reels — no
+     *    more, no less. If the goal is already met there is nothing to do.
+     *  - posts (10 and 300): each step adds its own fresh batch on top of
+     *    what is already held, so the goal is `held + amount`. The store
+     *    limit is raised to the goal so the cap can never silently cut the
+     *    batch short.
+     *
+     * Completion means playable, and playable means the media is on disk, so
+     * after every round the download queue is allowed to drain before the
+     * count is judged. Steps never overlap: the next step starts only when
+     * this one has finished, so posts are never downloaded while reels are,
+     * and reels are never downloaded while the 300-post pass is running.
      */
     private fun runUntilTarget(
         context: Context,
@@ -147,25 +154,26 @@ object BackgroundSyncManager {
         onDone: () -> Unit
     ) {
         currentStep = stepName
-        if (OfflineFeed.realPlayableCount(section) >= target) {
+        val before = OfflineFeed.realPlayableCount(section)
+        val goal = if (section == OfflineFeed.SECTION_REELS) target else before + target
+        if (section == OfflineFeed.SECTION_REELS && before >= target) {
+            // Already exactly the user's count — nothing to do, move on.
             onDone()
             return
         }
-        var attempts = 0
         fun round() {
-            attempts++
             OfflineSync.run(context, section, target,
-                includeVideo = true, force = true) { _ ->
-                if (OfflineFeed.realPlayableCount(section) >= target ||
-                    attempts >= MAX_ROUNDS
-                ) {
-                    onDone()
-                } else {
-                    // A short pause lets the download pool finish and the
-                    // page settle before the next round of the same step.
-                    AppExecutors.background.execute {
-                        try { Thread.sleep(ROUND_GAP_MS) } catch (_: InterruptedException) {}
-                        android.os.Handler(android.os.Looper.getMainLooper()).post { round() }
+                includeVideo = true, force = true, storeLimit = goal) { _ ->
+                // Let the downloads finish before judging the count: only
+                // fully-downloaded, playable items count toward the goal.
+                AppExecutors.background.execute {
+                    OfflineFeed.awaitPrefetch(300_000)
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        if (OfflineFeed.realPlayableCount(section) >= goal) {
+                            onDone()
+                        } else {
+                            round()
+                        }
                     }
                 }
             }

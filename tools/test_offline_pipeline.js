@@ -648,16 +648,34 @@ console.log('\nThe pipeline runs in the order it documents');
      /step4MorePosts[\s\S]{0,600}step5Stories\(context, p\)/.test(bsm));
 
   // A single capture pass ends when the page stops producing new cards,
-  // which is usually short of the target. The steps therefore run in rounds
-  // until the fully-downloaded count actually reaches the target, and only
+  // which is usually short of the goal. The steps therefore run in rounds
+  // until the fully-downloaded count actually reaches the goal, and only
   // then hand over — otherwise "keep 30 reels" saved a dozen and moved on.
-  ok('each step loops until its target is met',
+  ok('each step loops until its goal is met',
      /private fun runUntilTarget/.test(bsm) &&
-     /OfflineFeed\.realPlayableCount\(section\) >= target/.test(bsm));
+     /OfflineFeed\.realPlayableCount\(section\) >= goal/.test(bsm));
+  // Reels: the goal is the user's keep-count itself. Posts: the step adds
+  // its own fresh batch on top of what is already held — a store that
+  // already holds posts must not make the 10-post step skip straight to
+  // reels, which is what used to happen.
+  ok('posts add their fresh batch to what is held',
+     /val goal = if \(section == OfflineFeed\.SECTION_REELS\) target else before \+ target/.test(bsm));
   ok('reels run until exactly the user\'s count',
      /runUntilTarget\(context, p, OfflineFeed\.SECTION_REELS, target, "reels"\)/.test(bsm));
   ok('the 300-post pass runs until 300 are stored',
      /runUntilTarget\(context, p, OfflineFeed\.SECTION_FEED, target, "posts-300"\)/.test(bsm));
+  // "Complete" means playable, and playable means media on disk — so the
+  // download queue is drained before the count is judged, and the next step
+  // never starts before this one is complete.
+  ok('a step only advances once downloads are complete',
+     /OfflineFeed\.awaitPrefetch\(300_000\)/.test(bsm) &&
+     /realPlayableCount\(section\) >= goal/.test(bsm));
+  ok('there is no silent round budget that lowers an amount',
+     !/MAX_ROUNDS/.test(bsm));
+  ok('the store limit is raised to the goal, never below it',
+     /storeLimit = goal/.test(bsm) &&
+     /storeLimit: Int\? = null/.test(sync) &&
+     /addItems\(sec, newItems, storeLimit \?: target\)/.test(sync));
   ok('a step never starts before the previous one finished',
      !/OfflineSync\.run\(context, OfflineFeed\.SECTION_FEED,[\s\S]{0,40}OfflineSync\.run\(context, OfflineFeed\.SECTION_REELS/.test(bsm));
 }
@@ -834,16 +852,19 @@ console.log('\nThe stored document cannot hide the saved cards');
   // Reported: settings shows 100+ posts saved, but the offline home feed
   // shows only the handful the stored document itself carries. The document
   // brings its own copy of the first page; the saved cards were appended
-  // after it and, on a virtualized scroller, out of reach.
+  // after it and, on Facebook's fixed-height scroller, out of reach.
+  ok('only story cards are removed, nothing else',
+     /function isCard\(el\)/.test(inj) &&
+     /data-tracking-duration-id/.test(inj) &&
+     /data-video-id/.test(inj) &&
+     /data-story-id/.test(inj));
   ok('the document\'s own cards and placeholders are cleared before appending',
-     /!isChrome\(kids\[i\]\)/.test(inj) &&
+     /if \(isCard\(kids\[i\]\) \|\| isPlaceholder\(kids\[i\]\)\)/.test(inj) &&
      /box\.appendChild\(holder\)/.test(inj));
-  ok('chrome is recognised and kept',
-     /function isChrome\(el\)/.test(inj) &&
-     /role="textbox"\]/.test(inj));
-  ok('a frozen scroller cannot keep the cards out of reach',
-     /box\.style\.height = 'auto'/.test(inj) &&
-     /box\.style\.overflow = 'visible'/.test(inj));
+  ok('the page itself is un-clipped so the cards are reachable',
+     /root\.style\.overflowY = 'auto'/.test(inj) &&
+     /document\.body\.style\.overflowY = 'auto'/.test(inj) &&
+     /box\.style\.overflowY = 'auto'/.test(inj));
 }
 
 console.log('\nEvery saved card is on the offline page');
@@ -863,6 +884,7 @@ console.log('\nEvery saved card is on the offline page');
     `<body>
        <div data-type="vscroller">
          <div class="composer"><div role="textbox">What's on your mind?</div></div>
+         <div class="tray" aria-label="Stories"><span>Story tray</span></div>
          <div class="placeholder" style="height:80px"></div>
          <div class="docpost" data-tracking-duration-id="old1">
            <img src="https://scontent.fbcdn.net/x.jpg"><span>document post 1</span></div>
@@ -881,8 +903,11 @@ console.log('\nEvery saved card is on the offline page');
      scroller.querySelectorAll('.docpost').length === 0);
   ok('placeholders are gone', scroller.querySelectorAll('.placeholder').length === 0);
   ok('the composer chrome is kept', !!scroller.querySelector('.composer'));
-  ok('the scroller is not frozen', scroller.style.height === 'auto' &&
-     scroller.style.overflow === 'visible');
+  ok('the story tray is kept', !!scroller.querySelector('.tray'));
+  ok('the page can scroll to reach every card',
+     dom.window.document.documentElement.style.overflowY === 'auto' &&
+     dom.window.document.body.style.overflowY === 'auto' &&
+     scroller.style.overflowY === 'auto');
 }
 
 console.log('\nNo app-promo bar flashes on an offline page');
