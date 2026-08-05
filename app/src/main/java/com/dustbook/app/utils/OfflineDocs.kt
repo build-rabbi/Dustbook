@@ -148,7 +148,7 @@ object OfflineDocs {
      * screen can be perfectly usable without one. Stories are captured as
      * cards and rendered by the story viewer, so stories.html frequently does
      * not exist — the tab was therefore treated as unavailable and tapping it
-     * did nothing at all. shellFor() builds a page from the cards in exactly
+     * did nothing at all. cardsPage() builds a page from the cards in exactly
      * that case, so the route is valid whenever either exists.
      */
     fun navigableScreens(): List<String> = SCREENS.keys.filter { screen ->
@@ -211,7 +211,16 @@ object OfflineDocs {
         val f = fileFor(screen) ?: return null
 
         if (!f.exists() || f.length() == 0L) {
-            return shellFor(screen)
+            // No stored document, but there may still be saved cards.
+            val section = when (screen) {
+                "reels", "watch" -> OfflineFeed.SECTION_REELS
+                "stories" -> OfflineFeed.SECTION_STORIES
+                "home" -> OfflineFeed.SECTION_FEED
+                else -> null
+            }
+            val cards = section?.let { OfflineFeed.cardsHtml(it) } ?: ""
+            if (cards.isNotBlank()) return cardsPage(screen, cards, section)
+            return offlineFallbackPage()
         }
 
         // The built cache is invalidated only when the store changes, so a
@@ -232,28 +241,20 @@ object OfflineDocs {
                 else -> null
             }
             val cards = section?.let { OfflineFeed.cardsHtml(it) } ?: ""
-
-            // Resume position, so the user picks up where they left off
-            // instead of scrolling from the top every time.
-            val resumeId = when (screen) {
-                "reels", "watch" -> appContext?.let { Prefs(it).offlineResumeReel }
-                "stories" -> appContext?.let { Prefs(it).offlineResumeStories }
-                "home" -> appContext?.let { Prefs(it).offlineResumeFeed }
-                else -> null
+            if (cards.isNotBlank()) {
+                return cardsPage(screen, cards, section)
             }
 
+            // Nothing playable saved: serve the stored document. Facebook's
+            // own skeleton in it never finishes loading offline, so hide its
+            // loading indicators to avoid an endless spinner.
             val html = promoHideCss() +
                 f.readText() +
+                spinnerHideStyle() +
                 unmuteStripScript() +
                 offlineAdHideScript() +
                 OfflineBanner.html() +
                 "<script>" + OfflineNav.script(navigableScreens()) + "</script>" +
-                (if (cards.isNotBlank()) {
-                    "<script>" +
-                        (if (screen == "stories") storyViewer(cards.replace("\n", "\n---DBSTORY---\n"), resumeId)
-                         else OfflineInject.script(cards, resumeId)) +
-                        "</script>"
-                } else "") +
                 if (screen == "reels" || screen == "watch" || screen == "stories") {
                     "<script>" + VideoHelper.getOfflineVideoAssistScript() + "</script>"
                 } else ""
@@ -272,7 +273,7 @@ object OfflineDocs {
         }
     }
 
-    /** @see shellFor */
+    /** @see cardsPage */
 
     /**
      * Full-screen story viewer. Stories are MScreen captures, not inline
@@ -407,46 +408,90 @@ object OfflineDocs {
 
 
     /**
-     * When no stored Facebook document exists but we have saved cards,
-     * build the lightest possible page that shows them instead of
-     * returning null (which would hand the request to a WebView with no
-     * connection — the raw ERR_INTERNET_DISCONNECTED page).
+     * The offline reader page: every playable saved card in normal document
+     * flow, styled by our own minimal CSS - deliberately NOT Facebook's
+     * stylesheets (they carry `html,body{overflow:hidden}` rules that made
+     * the page unscrollable) and NOT Facebook's skeleton (its spinner never
+     * finishes offline, which looked like infinite loading on reels).
+     *
+     * Guarantees:
+     *  - `html,body` are forced to auto height/overflow, so the page always
+     *    scrolls and every saved card is reachable;
+     *  - no fixed-height scroller, no overlays - nothing can clip content;
+     *  - reels render as stacked cards with real <video> elements (the
+     *    capture rewrites their src to cached URLs), plus the video assist
+     *    script for byte-range playback;
+     *  - stories use the full-screen story viewer;
+     *  - a tiny diagnostic line at the top reports screen + card counts so
+     *    device issues can be read from a screenshot.
      */
-    private fun shellFor(screen: String): WebResourceResponse? {
-        val section = when (screen) {
-            "reels", "watch" -> OfflineFeed.SECTION_REELS
-            "stories" -> OfflineFeed.SECTION_STORIES
-            else -> OfflineFeed.SECTION_FEED
+    private fun cardsPage(
+        screen: String,
+        cards: String,
+        section: String?
+    ): WebResourceResponse? {
+        // Cached like the document path; invalidated when the store changes.
+        built[screen]?.let { b ->
+            return WebResourceResponse(
+                "text/html", "utf-8", 200, "OK",
+                mapOf("Cache-Control" to "no-store"),
+                b.bytes.inputStream()
+            )
         }
-        val cards = OfflineFeed.cardsHtml(section)
-        val use = if (cards.isNotBlank()) cards else
-            listOf(OfflineFeed.SECTION_REELS, OfflineFeed.SECTION_FEED,
-                   OfflineFeed.SECTION_STORIES)
-            .firstNotNullOfOrNull { s ->
-                OfflineFeed.cardsHtml(s).takeIf { it.isNotBlank() }
-            } ?: return offlineFallbackPage()
 
-        val html = "<!DOCTYPE html><html lang=\"en\"><head>" +
+        val playable = section?.let { OfflineFeed.realPlayableCount(it) } ?: 0
+        val stored = section?.let { OfflineFeed.storedCount(it) } ?: 0
+        val resumeId = when (screen) {
+            "reels", "watch" -> appContext?.let { Prefs(it).offlineResumeReel }
+            "stories" -> appContext?.let { Prefs(it).offlineResumeStories }
+            "home" -> appContext?.let { Prefs(it).offlineResumeFeed }
+            else -> null
+        }
+
+        val html = "<!DOCTYPE html><html><head>" +
             "<meta charset=\"utf-8\"><meta name=\"viewport\" " +
-            "content=\"width=device-width,initial-scale=1,user-scalable=no\">" +
-            "<style>body{margin:0;background:#18191a;color:#e4e6eb;" +
+            "content=\"width=device-width,initial-scale=1\">" +
+            "<style>" +
+            "html,body{height:auto!important;overflow:auto!important;}" +
+            "body{margin:0;padding:0;background:#18191a;color:#e4e6eb;" +
             "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto," +
-            "sans-serif}</style>" + promoHideCss() +
-            "</head><body><div>" + use + "</div>" +
+            "sans-serif;-webkit-text-size-adjust:100%;}" +
+            "img,video{max-width:100%;height:auto;}" +
+            "a{color:#4599ff;}" +
+            "video{background:#000;display:block;}" +
+            "</style>" +
+            promoHideCss() +
+            "</head><body>" +
+            "<div id=\"db-diag\" style=\"font-size:10px;color:#9a9a9a;" +
+            "padding:4px 8px;line-height:1.4\">dustbook offline · " + screen +
+            " · " + playable + "/" + stored + " cards</div>" +
+            "<div>" + cards + "</div>" +
+            offlineAdHideScript() +
             unmuteStripScript() +
+            "<script>document.querySelectorAll('video').forEach(function(v){" +
+            "if(!v.hasAttribute('controls'))v.setAttribute('controls','');" +
+            "v.setAttribute('playsinline','');});</script>" +
+            OfflineBanner.html() +
             "<script>" + OfflineNav.script(navigableScreens()) + "</script>" +
             (if (screen == "reels" || screen == "watch" || screen == "stories") {
                 "<script>" + VideoHelper.getOfflineVideoAssistScript() +
                     "</script>"
             } else "") +
             (if (screen == "stories") {
-                "<script>" + storyViewer(use.replace("\n", "\n---DBSTORY---\n"), null) + "</script>"
+                "<script>" + storyViewer(cards.replace("\n", "\n---DBSTORY---\n"), resumeId) + "</script>"
             } else "") +
             "</body></html>"
 
+        val b = html.toByteArray()
+        built[screen] = Built(b)
         return WebResourceResponse("text/html", "utf-8", 200, "OK",
-            mapOf("Cache-Control" to "no-store"), html.byteInputStream())
+            mapOf("Cache-Control" to "no-store"), b.inputStream())
     }
+
+    /** Hides Facebook's own loading indicators inside a stored document. */
+    private fun spinnerHideStyle(): String =
+        "<style>[data-sigil*=\"loading\"],[role=\"progressbar\"]," +
+        ".loading-indicator{display:none!important}</style>"
 
     /**
      * Hides advertising that was captured inside the stored document or a

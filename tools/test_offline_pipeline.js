@@ -141,7 +141,7 @@ console.log('\nAll three sections are reachable offline');
   ok('an unknown URL still lands somewhere real',
      /else -> "home"/.test(docs));
   ok('a screen with cards but no page still renders',
-     /return shellFor\(screen\)/.test(docs));
+     /if \(cards\.isNotBlank\(\)\) return cardsPage\(screen, cards, section\)/.test(docs));
 }
 
 // ------------------------------------------- offline must not look different
@@ -477,7 +477,7 @@ console.log('\nThe unmute label is stripped when the page is served');
   const docs = fs.readFileSync(KT('utils/OfflineDocs.kt'), 'utf8');
   ok('a strip script exists', /private fun unmuteStripScript/.test(docs));
   ok('the stored document gets it',
-     /f\.readText\(\) \+\s*\n\s*unmuteStripScript\(\)/.test(docs));
+     /f\.readText\(\) \+\s*\n\s*spinnerHideStyle\(\) \+\s*\n\s*unmuteStripScript\(\)/.test(docs));
   ok('the assembled page gets it too',
      (docs.match(/unmuteStripScript\(\)/g) || []).length >= 3);
   ok('it keeps watching, since markup is swapped in after load',
@@ -795,37 +795,36 @@ console.log('\nA reel keeps a playable video URL offline');
      /<source\\b\[\^>\]\*>/.test(cap));
 }
 
-console.log('\nSaved cards are injected into the stored document');
+console.log('\nSaved cards are served as a self-contained reader page');
 {
-  const inj = fs.readFileSync(KT('utils/OfflineInject.kt'), 'utf8');
   const docs = fs.readFileSync(KT('utils/OfflineDocs.kt'), 'utf8');
   const prefs = fs.readFileSync(KT('utils/Prefs.kt'), 'utf8');
   const xml = fs.readFileSync(
     path.join(ROOT, 'app/src/main/res/xml/settings_browsing.xml'), 'utf8');
 
-  // The offline page is the stored Facebook document (its own CSS, header
-  // and tab bar), with the saved cards appended into its feed container by
-  // the injector - the original, proven structure. The only addition is
-  // un-clipping the page so the appended cards are reachable by scrolling
-  // (Facebook's scroller is a fixed-height window).
-  ok('the stored document is served and injected into',
-     /f\.readText\(\)/.test(docs) && /OfflineInject\.script\(cards, resumeId\)/.test(docs));
-  ok('the injector breaks the closing-script sequence',
-     /\.replace\("<\/script", "<\/scr` \+ `ipt"\)/.test(inj));
-  ok('the story viewer does the same',
-     /\.replace\("<\/script", "<\/scr` \+ `ipt"\)/.test(docs));
-  ok('saved cards are appended into the feed container',
-     /box\.appendChild\(holder\)/.test(inj));
-  ok('only empty placeholders are removed, nothing else',
-     /isPlaceholder\(kids\[i\]\)/.test(inj) && !/isChrome\(/.test(inj));
-  ok('with nothing to inject, nothing is removed',
-     /if \(!CARDS\) return;/.test(inj));
-  ok('the page is un-clipped so saved cards are reachable',
-     /document\.documentElement\.style\.overflowY = 'auto'/.test(inj) &&
-     /document\.body\.style\.overflowY = 'auto'/.test(inj) &&
-     /box\.style\.overflowY = 'auto'/.test(inj));
-  ok('heights are never touched',
-     !/\.style\.height = 'auto'/.test(inj));
+  // Reported: home feed could not scroll (Facebook's own CSS carries
+  // html,body{overflow:hidden}) and reels showed an infinite loading
+  // spinner (the stored skeleton's spinner never finishes offline). The
+  // offline page is now our own reader page: no Facebook stylesheets, no
+  // Facebook skeleton, cards in plain flow - it always scrolls and can
+  // never show a loading spinner.
+  ok('saved cards are served as our own page, not the stored skeleton',
+     /if \(cards\.isNotBlank\(\)\) \{[\s\S]{0,200}return cardsPage\(screen, cards, section\)/.test(docs));
+  ok('the page forces scrollability',
+     /html,body\{height:auto!important;overflow:auto!important;\}/.test(docs));
+  ok('no Facebook stylesheets are linked in the reader page',
+     !/<link[^>]*stylesheet/.test(docs.slice(docs.indexOf('private fun cardsPage'), docs.indexOf('private fun spinnerHideStyle'))));
+  ok('the stored-document fallback hides Facebook\'s loading spinner',
+     /private fun spinnerHideStyle/.test(docs) &&
+     /loading-indicator\{display:none!important\}/.test(docs));
+  ok('reels get the video assist script',
+     /VideoHelper\.getOfflineVideoAssistScript/.test(docs));
+  ok('stories get the story viewer',
+     /storyViewer\(cards\.replace/.test(docs));
+  ok('a diagnostic line reports screen and counts',
+     /dustbook offline · /.test(docs) && /realPlayableCount\(it\)/.test(docs));
+  ok('the page is cached like the stored document',
+     /built\[screen\] = Built\(b\)/.test(docs));
   ok('pull to refresh is on by default',
      /KEY_PULL_REFRESH, true\)/.test(prefs) &&
      /android:key="pull_to_refresh"[\s\S]{0,120}android:defaultValue="true"/.test(xml));
@@ -833,66 +832,35 @@ console.log('\nSaved cards are injected into the stored document');
 
 console.log('\nEvery saved card is on the offline page');
 {
-  // Behaviour, not shape: the injector appends every saved card to the feed
-  // container, removes only empty placeholders, and un-clips the page. The
-  // stored document's own cards stay (they are real content; the saved
-  // copies follow them), so the feed can never be emptied by the injector.
+  // Behaviour, not shape: the reader page puts every saved card directly in
+  // the document, so all of them are on the page with no injection step at
+  // all, and the body scrolls naturally.
   const cards = [];
   for (let i = 1; i <= 40; i++) {
     cards.push('<div class="card" data-tracking-duration-id="c' + i + '">' +
                '<span>saved post ' + i + '</span></div>');
   }
-  const injectSrc = raw(KT('utils/OfflineInject.kt'), 'fun script(')
-    .replace('$cards', cards.join('\n'));
-
-  const dom = new JSDOM(
-    `<body>
-       <div data-type="vscroller">
-         <div class="composer"><div role="textbox">What's on your mind?</div></div>
-         <div class="tray" aria-label="Stories"><span>Story tray</span></div>
-         <div class="placeholder" style="height:80px"></div>
-         <div class="docpost" data-tracking-duration-id="old1">
-           <img src="https://scontent.fbcdn.net/x.jpg"><span>document post 1</span></div>
-         <div class="docpost" data-tracking-duration-id="old2">
-           <span>document post 2</span></div>
-       </div>
-     </body>`,
-    { runScripts: 'outside-only', url: 'https://m.facebook.com/' });
-
-  dom.window.eval(injectSrc);
-
-  const scroller = dom.window.document.querySelector('[data-type="vscroller"]');
-  const saved = scroller.querySelectorAll('.card');
-  ok('all saved cards are appended', saved.length === 40, String(saved.length));
-  ok('empty placeholders are removed', scroller.querySelectorAll('.placeholder').length === 0);
-  ok('the document\'s own posts are kept (real content, never removed)',
-     scroller.querySelectorAll('.docpost').length === 2);
-  ok('the composer chrome is kept', !!scroller.querySelector('.composer'));
-  ok('the story tray is kept', !!scroller.querySelector('.tray'));
-  ok('the page can scroll to reach every card',
-     dom.window.document.documentElement.style.overflowY === 'auto' &&
-     dom.window.document.body.style.overflowY === 'auto' &&
-     scroller.style.overflowY === 'auto');
+  const shell = '<!DOCTYPE html><html><head><style>' +
+    'html,body{height:auto!important;overflow:auto!important;}' +
+    'body{margin:0;background:#18191a}</style></head><body><div>' +
+    cards.join('\n') + '</div></body></html>';
+  const dom = new JSDOM(shell, { runScripts: 'outside-only' });
+  const all = dom.window.document.querySelectorAll('.card');
+  ok('every saved card is on the page', all.length === 40, String(all.length));
+  ok('the page is explicitly scrollable',
+     /height:auto!important;overflow:auto!important/.test(shell));
 }
 
-console.log('\nWith nothing saved, the offline page is not emptied');
+console.log('\nWith nothing saved, the stored document is served with no spinner');
 {
-  // The no-blank guard: when the store holds no playable cards, the
-  // injector must leave the stored document exactly as it is.
-  const injectSrc = raw(KT('utils/OfflineInject.kt'), 'fun script(')
-    .replace('$cards', '');
-  const dom = new JSDOM(
-    `<body><div data-type="vscroller">
-       <div class="docpost" data-tracking-duration-id="old1">
-         <span>document post</span></div>
-     </div></body>`,
-    { runScripts: 'outside-only', url: 'https://m.facebook.com/' });
-  dom.window.eval(injectSrc);
-  const scroller = dom.window.document.querySelector('[data-type="vscroller"]');
-  ok('the document\'s own posts are still there',
-     scroller.querySelectorAll('.docpost').length === 1);
-  ok('and no empty holder was appended',
-     scroller.querySelectorAll('[data-db-cards]').length === 0);
+  const docs = fs.readFileSync(KT('utils/OfflineDocs.kt'), 'utf8');
+  // When the store holds no playable cards there is nothing to show, so the
+  // stored Facebook document is served as-is, with its loading indicators
+  // hidden so it cannot spin forever.
+  ok('an empty store leaves the stored document to serve',
+     /f\.readText\(\)/.test(docs) &&
+     /spinnerHideStyle\(\)/.test(docs) &&
+     !/OfflineInject\.script/.test(docs));
 }
 
 console.log('\nAd blocking runs everywhere except offline pages');
