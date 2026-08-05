@@ -104,6 +104,7 @@ console.log('\nInjected content cannot duplicate');
 {
   const inject = raw(KT('utils/OfflineInject.kt'), 'fun script(')
     .replace('`$cards`', '`<div class="dbcard">post</div>`')
+    .replace('${savedIds.asJsSet()}', '')
     .replace('${if (isReels) "true" else "false"}', 'false');
 
   const dom = new JSDOM(

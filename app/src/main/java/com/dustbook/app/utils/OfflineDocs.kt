@@ -232,6 +232,12 @@ object OfflineDocs {
                 else -> null
             }
             val cards = section?.let { OfflineFeed.cardsHtml(it) } ?: ""
+            // The ids of the cards being injected, so the injector can
+            // remove the document's own copy of the same posts (exact
+            // duplicates only — never on a guess).
+            val savedIds = section?.let { s ->
+                OfflineFeed.realPlayableItems(s).map { it.id }
+            } ?: emptyList()
 
             // Resume position, so the user picks up where they left off
             // instead of scrolling from the top every time.
@@ -250,7 +256,7 @@ object OfflineDocs {
                 (if (cards.isNotBlank()) {
                     "<script>" +
                         (if (screen == "stories") storyViewer(cards.replace("\n", "\n---DBSTORY---\n"), resumeId)
-                         else OfflineInject.script(cards, resumeId)) +
+                         else OfflineInject.script(cards, resumeId, savedIds)) +
                         "</script>"
                 } else "") +
                 if (screen == "reels" || screen == "watch" || screen == "stories") {

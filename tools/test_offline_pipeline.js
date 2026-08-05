@@ -853,32 +853,42 @@ console.log('\nThe stored document cannot hide the saved cards');
   // shows only the handful the stored document itself carries. The document
   // brings its own copy of the first page; the saved cards were appended
   // after it and, on Facebook's fixed-height scroller, out of reach.
-  ok('only story cards are removed, nothing else',
-     /function isCard\(el\)/.test(inj) &&
+  ok('saved cards are appended before anything is removed',
+     /box\.appendChild\(holder\);[\s\S]{0,900}var id = cardIdOf\(k\)/.test(inj));
+  ok('only exact duplicates are removed, never on a guess',
+     /function cardIdOf\(el\)/.test(inj) &&
      /data-tracking-duration-id/.test(inj) &&
-     /data-video-id/.test(inj) &&
-     /data-story-id/.test(inj));
-  ok('the document\'s own cards and placeholders are cleared before appending',
-     /if \(isCard\(kids\[i\]\) \|\| isPlaceholder\(kids\[i\]\)\)/.test(inj) &&
-     /box\.appendChild\(holder\)/.test(inj));
-  ok('the page itself is un-clipped so the cards are reachable',
-     /root\.style\.overflowY = 'auto'/.test(inj) &&
-     /document\.body\.style\.overflowY = 'auto'/.test(inj) &&
-     /box\.style\.overflowY = 'auto'/.test(inj));
+     /if \(id && SAVED\[id\]\)/.test(inj));
+  ok('with nothing to inject, nothing is removed',
+     /if \(!CARDS\) return;/.test(inj));
+  ok('a failure can never blank the page',
+     /try \{[\s\S]{0,600}box\.appendChild\(holder\)/.test(inj) &&
+     /catch \(e\) \{\s*\/\/ Never let a failure blank the page/.test(inj));
+  ok('the page is un-clipped, heights are left alone',
+     /document\.documentElement\.style\.overflowY = 'auto'/.test(inj) &&
+     !/\.style\.height = 'auto'/.test(inj));
 }
 
 console.log('\nEvery saved card is on the offline page');
 {
-  // Behaviour, not shape: a stored document with its own posts, placeholders
-  // and chrome goes through the injector; only the saved cards may remain as
-  // feed content, and all of them must be there.
+  // Behaviour, not shape: a stored document with its own posts (exact
+  // duplicates of saved cards), a non-duplicate card, placeholders and
+  // chrome goes through the injector; every saved card must be on the page,
+  // duplicates must be gone, and nothing else may be touched.
   const cards = [];
   for (let i = 1; i <= 40; i++) {
     cards.push('<div class="card" data-tracking-duration-id="c' + i + '">' +
                '<span>saved post ' + i + '</span></div>');
   }
-  const injectSrc = raw(KT('utils/OfflineInject.kt'), 'fun script(')
+  const savedIds = cards.map((c) => 'data-tracking-duration-id:' +
+    c.match(/data-tracking-duration-id="([^"]+)"/)[1]);
+  let injectSrc = raw(KT('utils/OfflineInject.kt'), 'fun script(')
     .replace('$cards', cards.join('\n'));
+  // Fill the SAVED set the way the Kotlin side does (asJsSet), and drop the
+  // Kotlin template placeholder line (keeping `var SAVED = {};` itself).
+  const setJs = savedIds.map((id) => 'SAVED["' + id + '"]=1;').join('');
+  injectSrc = injectSrc
+    .replace('${savedIds.asJsSet()}', setJs);
 
   const dom = new JSDOM(
     `<body>
@@ -886,10 +896,11 @@ console.log('\nEvery saved card is on the offline page');
          <div class="composer"><div role="textbox">What's on your mind?</div></div>
          <div class="tray" aria-label="Stories"><span>Story tray</span></div>
          <div class="placeholder" style="height:80px"></div>
-         <div class="docpost" data-tracking-duration-id="old1">
+         <div class="docpost" data-tracking-duration-id="c1">
            <img src="https://scontent.fbcdn.net/x.jpg"><span>document post 1</span></div>
-         <div class="docpost" data-tracking-duration-id="old2">
+         <div class="docpost" data-tracking-duration-id="c2">
            <span>document post 2</span></div>
+         <div class="special" data-special="1"><span>not a saved post</span></div>
        </div>
      </body>`,
     { runScripts: 'outside-only', url: 'https://m.facebook.com/' });
@@ -899,8 +910,10 @@ console.log('\nEvery saved card is on the offline page');
   const scroller = dom.window.document.querySelector('[data-type="vscroller"]');
   const saved = scroller.querySelectorAll('.card');
   ok('all saved cards are injected', saved.length === 40, String(saved.length));
-  ok('the document\'s own posts are not duplicated',
+  ok('the document\'s duplicate posts are removed',
      scroller.querySelectorAll('.docpost').length === 0);
+  ok('a card the store does not hold is left alone',
+     !!scroller.querySelector('.special'));
   ok('placeholders are gone', scroller.querySelectorAll('.placeholder').length === 0);
   ok('the composer chrome is kept', !!scroller.querySelector('.composer'));
   ok('the story tray is kept', !!scroller.querySelector('.tray'));
@@ -908,6 +921,27 @@ console.log('\nEvery saved card is on the offline page');
      dom.window.document.documentElement.style.overflowY === 'auto' &&
      dom.window.document.body.style.overflowY === 'auto' &&
      scroller.style.overflowY === 'auto');
+}
+
+console.log('\nWith nothing saved, the offline page is not emptied');
+{
+  // The no-blank guard: when the store holds no playable cards, the
+  // injector must leave the stored document exactly as it is.
+  let injectSrc = raw(KT('utils/OfflineInject.kt'), 'fun script(')
+    .replace('$cards', '')
+    .replace('${savedIds.asJsSet()}', '');
+  const dom = new JSDOM(
+    `<body><div data-type="vscroller">
+       <div class="docpost" data-tracking-duration-id="old1">
+         <span>document post</span></div>
+     </div></body>`,
+    { runScripts: 'outside-only', url: 'https://m.facebook.com/' });
+  dom.window.eval(injectSrc);
+  const scroller = dom.window.document.querySelector('[data-type="vscroller"]');
+  ok('the document\'s own posts are still there',
+     scroller.querySelectorAll('.docpost').length === 1);
+  ok('and no empty holder was appended',
+     scroller.querySelectorAll('[data-db-cards]').length === 0);
 }
 
 console.log('\nNo app-promo bar flashes on an offline page');
