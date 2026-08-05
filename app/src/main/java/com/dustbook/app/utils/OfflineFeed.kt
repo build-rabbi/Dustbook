@@ -240,8 +240,17 @@ object OfflineFeed {
      * For feed/stories: at least one non-avatar asset must be cached (or the
      * item has no media at all, i.e. a text post).
      */
+    /**
+     * Advertising is never content: a saved card whose markup carries the
+     * "Sponsored" label is not shown offline and does not count toward the
+     * saved total. This applies at display/count time, so items captured
+     * before the capture-side skip are filtered here too.
+     */
+    private fun isSponsored(item: Item): Boolean =
+        item.html.contains("sponsored", ignoreCase = true)
+
     fun realPlayableItems(section: String): List<Item> =
-        loadItems(section).filter { isFullyDownloaded(it) }
+        loadItems(section).filter { !isSponsored(it) && isFullyDownloaded(it) }
 
     /**
      * True when everything this item needs is already on disk.

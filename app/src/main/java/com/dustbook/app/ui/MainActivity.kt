@@ -108,6 +108,14 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var isOnline: Boolean = true
 
     /**
+     * True while the WebView is showing a page served by [OfflineDocs] (the
+     * offline store). Set synchronously in shouldInterceptRequest for the
+     * main frame, so the ad blocker and cosmetic ad remover can be skipped
+     * exactly on offline pages — and only there.
+     */
+    @Volatile private var servingOffline: Boolean = false
+
+    /**
      * Consecutive main-frame failures for the current navigation.
      *
      * Reset the moment a page starts or finishes successfully, so a genuine
@@ -1255,7 +1263,7 @@ class MainActivity : AppCompatActivity() {
                 // sponsored video never gets to autoplay. Never on an offline
                 // page: the saved content is not advertising, and the ad
                 // remover has hidden it before (black offline feed).
-                if (isOnline && prefs.adBlock && prefs.cosmeticFilter) {
+                if (!servingOffline && prefs.adBlock && prefs.cosmeticFilter) {
                     view?.evaluateJavascript(CosmeticFilters.styleScript(), null)
                     view?.evaluateJavascript(MFacebookAds.script(), null)
                 }
@@ -1363,18 +1371,27 @@ class MainActivity : AppCompatActivity() {
             ): WebResourceResponse? {
                 request ?: return null
 
-                if (isOnline && AdBlocker.shouldBlockRequest(request)) {
-                    viewModel.incrementBlocked()
-                    return AdBlocker.createEmptyResponse()
+                // Track whether the current main frame is an offline-served
+                // page. This is set synchronously here — before onPageStarted
+                // — so there is no race with the connectivity flag. The ad
+                // blocker and the cosmetic ad remover run on every page
+                // EXCEPT offline-served ones: offline pages are saved
+                // content, never advertising, and the cosmetic remover has
+                // hidden saved content before (black offline feed).
+                if (request.isForMainFrame) {
+                    if (prefs.offlineRead && !isOnline) {
+                        val off = OfflineDocs.serve(request)
+                        if (off != null) {
+                            servingOffline = true
+                            return off
+                        }
+                    }
+                    servingOffline = false
                 }
 
-                // Offline main frame. Serve the real Facebook document we
-                // stored while online, so the header, tab bar, counts and
-                // post controls are all exactly where they are online -
-                // because it is the same page. Without this the WebView's own
-                // error page wins before a single cached asset is requested.
-                if (prefs.offlineRead && !isOnline && request.isForMainFrame) {
-                    OfflineDocs.serve(request)?.let { return it }
+                if (!servingOffline && AdBlocker.shouldBlockRequest(request)) {
+                    viewModel.incrementBlocked()
+                    return AdBlocker.createEmptyResponse()
                 }
 
                 // Online, hand every subresource straight back to the WebView.
@@ -1457,7 +1474,7 @@ class MainActivity : AppCompatActivity() {
         // Offline pages are saved content, never ads: the cosmetic ad
         // remover must not run on them (it has hidden the offline feed
         // before).
-        if (isOnline && prefs.adBlock && prefs.cosmeticFilter) {
+        if (!servingOffline && prefs.adBlock && prefs.cosmeticFilter) {
             view.evaluateJavascript(CosmeticFilters.styleScript(), null)
             view.evaluateJavascript(CosmeticFilters.proceduralScript(), null)
             view.evaluateJavascript(MFacebookAds.script(), null)

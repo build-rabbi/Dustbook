@@ -214,19 +214,6 @@ object OfflineDocs {
             return shellFor(screen)
         }
 
-        // Saved content wins over the stored document. The stored skeleton's
-        // own scripts are dead offline, its scroller is a fixed-height window
-        // that hides everything beyond it, and injecting into it has proved
-        // unreliable across real Facebook layouts. The cards-only page shows
-        // every saved item and scrolls naturally.
-        val cards = when (screen) {
-            "reels", "watch" -> OfflineFeed.SECTION_REELS
-            "stories" -> OfflineFeed.SECTION_STORIES
-            "home" -> OfflineFeed.SECTION_FEED
-            else -> null
-        }?.let { OfflineFeed.cardsHtml(it) } ?: ""
-        if (cards.isNotBlank()) return shellFor(screen, cards)
-
         // The built cache is invalidated only when the store changes, so a
         // hit here is always fresh. No stamp check, no file stat, no copy.
         built[screen]?.let { b ->
@@ -244,6 +231,13 @@ object OfflineDocs {
                 "home" -> OfflineFeed.SECTION_FEED
                 else -> null
             }
+            val cards = section?.let { OfflineFeed.cardsHtml(it) } ?: ""
+            // The ids of the cards being injected, so the injector can
+            // remove the document's own copy of the same posts (exact
+            // duplicates only — never on a guess).
+            val savedIds = section?.let { s ->
+                OfflineFeed.realPlayableItems(s).map { it.id }
+            } ?: emptyList()
 
             // Resume position, so the user picks up where they left off
             // instead of scrolling from the top every time.
@@ -257,8 +251,15 @@ object OfflineDocs {
             val html = promoHideCss() +
                 f.readText() +
                 unmuteStripScript() +
+                offlineAdHideScript() +
                 OfflineBanner.html() +
                 "<script>" + OfflineNav.script(navigableScreens()) + "</script>" +
+                (if (cards.isNotBlank()) {
+                    "<script>" +
+                        (if (screen == "stories") storyViewer(cards.replace("\n", "\n---DBSTORY---\n"), resumeId)
+                         else OfflineInject.script(cards, resumeId, savedIds)) +
+                        "</script>"
+                } else "") +
                 if (screen == "reels" || screen == "watch" || screen == "stories") {
                     "<script>" + VideoHelper.getOfflineVideoAssistScript() + "</script>"
                 } else ""
@@ -412,44 +413,31 @@ object OfflineDocs {
 
 
     /**
-     * The cards-only page: every saved card in normal document flow, so it
-     * scrolls naturally and nothing can hide the content.
-     *
-     * This is now the primary offline page whenever the store holds saved
-     * content, for home, reels and stories alike. The stored Facebook
-     * document is only served when there is nothing saved to show.
+     * When no stored Facebook document exists but we have saved cards,
+     * build the lightest possible page that shows them instead of
+     * returning null (which would hand the request to a WebView with no
+     * connection — the raw ERR_INTERNET_DISCONNECTED page).
      */
-    private fun shellFor(screen: String, cards: String? = null): WebResourceResponse? {
+    private fun shellFor(screen: String): WebResourceResponse? {
         val section = when (screen) {
             "reels", "watch" -> OfflineFeed.SECTION_REELS
             "stories" -> OfflineFeed.SECTION_STORIES
             else -> OfflineFeed.SECTION_FEED
         }
-        val use = if (cards != null && cards.isNotBlank()) cards else
-            OfflineFeed.cardsHtml(section).takeIf { it.isNotBlank() } ?:
+        val cards = OfflineFeed.cardsHtml(section)
+        val use = if (cards.isNotBlank()) cards else
             listOf(OfflineFeed.SECTION_REELS, OfflineFeed.SECTION_FEED,
                    OfflineFeed.SECTION_STORIES)
             .firstNotNullOfOrNull { s ->
                 OfflineFeed.cardsHtml(s).takeIf { it.isNotBlank() }
             } ?: return offlineFallbackPage()
 
-        // Cached like the document path; invalidated whenever the store
-        // changes, so a hit here is always fresh.
-        built[screen]?.let { b ->
-            return WebResourceResponse(
-                "text/html", "utf-8", 200, "OK",
-                mapOf("Cache-Control" to "no-store"),
-                b.bytes.inputStream()
-            )
-        }
-
         val html = "<!DOCTYPE html><html lang=\"en\"><head>" +
             "<meta charset=\"utf-8\"><meta name=\"viewport\" " +
             "content=\"width=device-width,initial-scale=1,user-scalable=no\">" +
             "<style>body{margin:0;background:#18191a;color:#e4e6eb;" +
             "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto," +
-            "sans-serif}img,video{max-width:100%;height:auto}</style>" +
-            promoHideCss() +
+            "sans-serif}</style>" + promoHideCss() +
             "</head><body><div>" + use + "</div>" +
             unmuteStripScript() +
             OfflineBanner.html() +
@@ -463,11 +451,42 @@ object OfflineDocs {
             } else "") +
             "</body></html>"
 
-        val b = html.toByteArray()
-        built[screen] = Built(b)
         return WebResourceResponse("text/html", "utf-8", 200, "OK",
-            mapOf("Cache-Control" to "no-store"), b.inputStream())
+            mapOf("Cache-Control" to "no-store"), html.byteInputStream())
     }
+
+    /**
+     * Hides advertising that was captured inside the stored document or a
+     * saved card, without the online ad remover (which must not run on
+     * offline pages — it has hidden saved content before).
+     *
+     * Finds an element whose visible text is exactly the "Sponsored" label,
+     * then hides the story card that carries it. Only hides; nothing is
+     * removed, so the page can never be broken by it.
+     */
+    private fun offlineAdHideScript(): String = """
+        <script id="__db_off_ad_hide">
+        (function(){
+          if (window.__dbOffAdHide) return;
+          window.__dbOffAdHide = true;
+          var labels = Array.prototype.slice.call(
+            document.querySelectorAll('div,span,a'));
+          for (var i = 0; i < labels.length; i++) {
+            var el = labels[i];
+            var t = (el.innerText || el.textContent || '').trim();
+            if (t.toLowerCase() !== 'sponsored') continue;
+            var card = el.closest(
+              '[data-tracking-duration-id],[data-video-id],[data-story-id]');
+            if (card) { card.style.display = 'none'; continue; }
+            var sc = el.closest('[data-type="vscroller"]');
+            if (sc && el.parentNode) {
+              var p = el.parentNode;
+              if (p !== sc && p.parentNode === sc) p.style.display = 'none';
+            }
+          }
+        })();
+        </script>
+    """.trimIndent()
 
     /**
      * Store a page captured from a live WebView.
