@@ -1,50 +1,39 @@
-# Session Status — Dustbook Offline Sync (2026-08-05, round 2)
+# Session Status — Dustbook Offline Sync (2026-08-05, round 3)
 
 ## ✅ Pushed + CI green
-- Branch `arena/019fce78-dustbook` — 3 code commits + status file, all pushed.
-- CI run for the latest commit: all steps green (jsdom suite, lint, unit tests,
-  debug + release APK, blocklist-in-APK, signing cert, uploads).
+- Branch `arena/019fce78-dustbook` — 4 code commits + status file.
+- CI run 30961974283 (commit e0df223): **ALL GREEN** — jsdom suite (844 checks) ·
+  Lint · Unit tests · Debug + Release APK · blocklist-in-APK · signing · uploads.
 
-## Round 2 — what broke and what was fixed (commit `1a0b1f2`)
+## Round 3 — black screen on offline home & reels (commit e0df223)
+User report (with screenshots): offline home feed and reels tab show a black
+screen — no content. Screenshot analysis: header renders faintly, feed area
+pure black (screenshot 2 = 99.6% black).
 
-### Bug 1 (owner report): "10 posts download na hoye agei reels download start hoi"
-Root cause: `runUntilTarget` short-circuited when the store already held
-≥ target playable items — the store had 100+ posts from before, so step A
-(10 posts) was skipped instantly and reels started immediately. The count was
-also judged right after the capture pass while media was still downloading,
-and an 18-round budget silently lowered every amount.
-Fix:
-- Posts steps now ADD their fresh batch: goal = held count + asked amount
-  (`before + target`), so 10 fresh posts are always captured before reels.
-- Reels keep-count stays the goal (store capped at exactly the user's count).
-- After every round the download queue is drained (`awaitPrefetch`) BEFORE the
-  count is judged — "complete" means playable, playable means media on disk.
-- Round budget removed: no silent lowering; next step only starts when the
-  previous one is actually complete.
-- `OfflineSync.run` gained `storeLimit` so a step's store cap can be raised to
-  the goal instead of silently truncating the batch.
+Root cause: the injector removed the document's own cards and then appended
+the saved cards; on the real Facebook DOM the appended content did not render,
+leaving an empty dark feed area.
 
-### Bug 2 (owner report): "offline ui full venge"
-Previous round's injector removed anything not recognised as "chrome" and set
-`overflow:visible` on the scroller — too aggressive; the offline feed broke.
-Fix (surgical, minimal):
-- Only elements carrying story-card markers (the same ones the capture uses:
-  data-tracking-duration-id / data-video-id / data-story-id / data-comp-id /
-  data-successful-render-id, or links to posts/reels/videos/stories) are
-  removed — the document's own copy of the first page, so nothing is
-  duplicated. Composer, story tray, tabs, headers, dividers: untouched.
-- The page (html/body) and the scroller are un-clipped (`overflowY:auto`) so
-  the appended saved cards are reachable by scrolling. No other layout
-  touched.
+Fixes (OfflineInject.kt + OfflineDocs.kt):
+- **Append FIRST, remove afterwards** — and remove ONLY cards whose id exactly
+  matches a saved card's id (`cardIdOf` mirrors the capture's `idOf`; ids fed
+  from `OfflineFeed.realPlayableItems` via a `SAVED` set built in Kotlin).
+  Nothing is removed on a guess.
+- **No-blank guard**: if `CARDS` is empty, nothing is removed at all; the whole
+  inject body is wrapped in try/catch — the offline page can never be left
+  blank by this script.
+- Un-clipping is now **overflowY-only** (html/body/scroller); the previous
+  `height:auto` changes are gone (could collapse FB's own layout, e.g. the
+  full-screen reels pager).
+- Grey skeleton placeholders are still removed (empty, media-less blocks).
 
-### Verification
-- Full jsdom suite: **839 passed, 0 failed** (was 834; flow + inject tests updated).
-- Brace balance OK; no dangling refs (isChrome in OfflineCapture/OfflineFeed is
-  a separate pre-existing function, unrelated).
-- CI: all steps green.
+Tests: behavioural coverage rewritten (40 cards injected; document duplicates
+removed by id; a non-duplicate doc card is kept; no-blank guard verified).
+Full suite **844 passed, 0 failed**.
 
-## Still open (needs a device report)
-- If the offline feed still shows only a handful of posts on a real device,
-  a screenshot of the offline home screen is needed — the exact container
-  structure of the live m.facebook.com page cannot be fetched from the sandbox
-  (HTTP 400), so DOM-level diagnosis needs eyes on the device.
+## Still open
+- Device test needed: after this build, offline home should show ALL saved
+  posts (scrollable) and reels should play. If anything is still off, a fresh
+  screenshot + which build was installed will pin it down.
+- The app's own diagnostic toggle (Settings → About) can inspect the served
+  page if needed.
