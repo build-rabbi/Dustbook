@@ -1,50 +1,54 @@
-# Session Status — Dustbook Offline Sync (2026-08-05, round 4)
+# Session Status — Dustbook Offline Sync (2026-08-05, round 5)
 
 ## ✅ Pushed + CI green
-- Branch `arena/019fce78-dustbook` — 5 code commits + status file, all pushed.
-- CI for the latest commit: all steps green (jsdom suite, lint, unit tests,
-  debug + release APK, blocklist-in-APK, signing cert, uploads).
+- Branch `arena/019fce78-dustbook` — commit `d7984b3` (this round) pushed.
+- CI run 30964408206: **ALL GREEN** — jsdom suite (849 checks) · Lint · Unit tests ·
+  Debug + Release APK · blocklist-in-APK · signing · uploads.
 
-## Round 4 — owner's device findings (commit `d4f2b0e`)
+## Round 5 — the real root causes (owner's feedback: ads back online, offline UI broken, ads offline)
 
-### Finding 1: ad blocker ON = black offline reels; OFF = content shows
-Root cause: the network ad blocker (`shouldInterceptRequest`) and the cosmetic
-ad-remover scripts (MFacebookAds / CosmeticFilters) ran on EVERY page,
-including offline-served ones. They blocked/hid things the offline page
-needed, leaving a black feed.
-Fix (MainActivity):
-- `shouldInterceptRequest` blocks only when `isOnline`.
-- Cosmetic ad scripts are injected only when `isOnline` (both onPageStarted
-  and injectAll). Offline pages are saved content, never advertising.
+### 1. Online ads returned (ad blocker weaker than v5.1.0)
+Root cause: previous round gated ad blocking on the connectivity flag
+(`isOnline`). That flag races with page loads — a page that loaded fine could
+have been started while the flag was momentarily false, so the cosmetic ad
+scripts never injected and requests were never blocked → ads on online reels.
+Fix: a **per-load `servingOffline` flag**, set synchronously in
+`shouldInterceptRequest` when (and only when) `OfflineDocs.serve()` answers the
+main frame. Online pages get full v5.1.0-strength blocking again; offline
+pages get none. No connectivity race.
 
-### Finding 2: 10 posts saved but only 1 visible; no scrolling on home/reels
-Root cause: the saved cards were injected into the stored Facebook document,
-whose own skeleton is dead offline and whose scroller is a fixed-height
-window — appended content was out of reach or invisible.
-Fix (OfflineDocs): **the cards-only shell page is now the primary offline
-page.** Whenever a section has playable saved cards, `serve()` returns the
-shell (all cards in normal document flow → natural scrolling; media
-`max-width:100%`; OfflineNav tab bar; OfflineBanner; VideoHelper assist for
-reels; storyViewer for stories; built-cache like the document path). The
-stored Facebook document is served only when nothing is saved. Injection into
-the skeleton is gone (`OfflineInject` no longer called from `serve()`).
+### 2. Offline UI broken ("puray venge")
+Root cause: the previous cards-only shell page had no Facebook CSS, so saved
+cards rendered as raw unstyled HTML.
+Fix: the offline page is **the stored Facebook document again** (real CSS,
+header, tab bar — the v5.1.0 look), with the saved cards injected into its
+feed container (append-first, dedupe by exact id, no-blank guard, overflowY
+unclip so every card is reachable). The black screens this design hit earlier
+were caused by issue 1 (the cosmetic ad remover hiding saved content offline)
+— that is now fixed at the root, so the injection works.
 
-### Finding 3: video ads saved in the offline library
-Fix (OfflineCapture): a card whose text or aria-label contains "sponsored"
-is never captured — advertising is not content.
+### 3. Ads in the offline library (cv666.com / fbzdd.com spam posts)
+Three layers now:
+- Capture skips any card labelled "Sponsored".
+- `realPlayableItems` filters saved cards whose markup says "Sponsored" — they
+  neither count toward the total nor display (applies to previously captured
+  items too).
+- The served document runs a tiny offline ad-hider that hides sponsored cards
+  captured earlier inside the stored page itself.
 
-### Verification
-- Full jsdom suite: **838 passed, 0 failed** (sections rewritten for the
-  shell architecture + 3 new sections: shell serving, ad-block-off-offline,
-  sponsored-skip).
-- Brace balance OK on all modified files.
+## Verification
+- Full jsdom suite: **849 passed, 0 failed**.
+- Brace balance OK; no dangling `isOnline &&` ad gates left.
 - CI: all steps green.
 
-## Notes
-- `OfflineInject.kt` is retained (now unused by serve()) — its own unit tests
-  still pass; it can be deleted in a later cleanup if the owner wants.
-- Stored documents (home.html etc.) are still refreshed in the background and
-  used as the fallback when the store is empty.
-- Device test still needed: install the new build, go offline, confirm home
-  feed shows ALL saved posts with working scroll, reels play, no black
-  screens, no video ads in the library.
+## Notes / options for the owner
+- If the owner wants a guaranteed-good baseline while testing, the last
+  released tag **v5.1.0** is still there (`git checkout v5.1.0`). The arena
+  branch is the one with all offline-flow work.
+- Device test checklist for the new build (d7984b3):
+  1. Online: reels feed — no ads (adblock ON).
+  2. Offline: home feed — Facebook look, ALL saved posts, scrolling works.
+  3. Offline: reels play, no black screen, adblock setting irrelevant.
+  4. Offline library: no sponsored/spam posts (old ones need a one-time
+     "Clear offline" to purge stored items, or they are filtered at display
+     anyway).
