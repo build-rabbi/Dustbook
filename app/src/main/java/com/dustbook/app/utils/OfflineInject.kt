@@ -21,26 +21,10 @@ package com.dustbook.app.utils
  *    page, so it cannot appear online
  *  - the container is marked `data-db-offline`; a second pass sees the marker
  *    and stops, so nothing is ever added twice
- *  - the saved cards are appended FIRST, and the document's own copy of the
- *    first page is removed only afterwards, and only when a card's id exactly
- *    matches a saved card's id (the same posts, served twice). Nothing is
- *    ever removed on a guess. If there is nothing to inject, nothing is
- *    removed at all — the page can never be left blank by this script.
- *  - the grey placeholder blocks Facebook's JS would have filled are removed
- *    in the same operation, so the skeleton and the real posts cannot both be
- *    on screen
+ *  - the placeholders it replaces are removed in the same operation, so the
+ *    grey blocks and the real posts cannot both be on screen
  */
 object OfflineInject {
-
-    /** The saved-id set as JS, quoted safely. */
-    private fun List<String>.asJsSet(): String {
-        if (isEmpty()) return ""
-        return take(2000).joinToString("") { id ->
-            val safe = id.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", " ").replace("\r", " ")
-            "SAVED[\"" + safe + "\"]=1;"
-        }
-    }
 
     /**
      * @param cardsHtml Facebook's own markup for the saved stories, exactly
@@ -48,12 +32,8 @@ object OfflineInject {
      * @param resumeId  when non-null and starts with "SCROLL:", it is a pixel
      *                  offset to restore on the feed scroller; otherwise it
      *                  is a reel/story id to scroll to.
-     * @param savedIds  the ids of the cards in [cardsHtml], as produced by
-     *                  the capture (e.g. "data-tracking-duration-id:123").
-     *                  The document's own cards are removed only when their
-     *                  id is in this set — i.e. only exact duplicates.
      */
-    fun script(cardsHtml: String, resumeId: String? = null, savedIds: List<String> = emptyList()): String {
+    fun script(cardsHtml: String, resumeId: String? = null): String {
         // The HTML parser ends a <script> at the first "</script>" it sees,
         // wherever that appears — including inside a JS string. Facebook's
         // stored markup contains inline scripts, so one such card truncated
@@ -66,7 +46,7 @@ object OfflineInject {
         val cards = cardsHtml
             .replace("\\", "\\\\")
             .replace("`", "\\`")
-            .replace("$", "\\$")
+            .replace("\$", "\\\$")
             .replace("</script", "</scr` + `ipt")
 
         val main = """
@@ -77,9 +57,6 @@ object OfflineInject {
           var CARDS = `$cards`;
           if (!CARDS) return;
 
-          var SAVED = {};
-          ${savedIds.asJsSet()}
-
           function feedContainer() {
             var sc = document.querySelector('[data-type="vscroller"]');
             if (sc) return sc;
@@ -87,7 +64,6 @@ object OfflineInject {
             return alt || document.body;
           }
 
-          /** An empty element with no media — a grey skeleton block. */
           function isPlaceholder(el) {
             if (!el || el.nodeType !== 1) return false;
             if (el.querySelector('img,video')) return false;
@@ -95,78 +71,36 @@ object OfflineInject {
             return t.length === 0;
           }
 
-          /**
-           * The id of a story card, using exactly the same markers and the
-           * same order as the capture script, so the id matches the one the
-           * app stored. Returns '' for anything that is not a story card
-           * (composer, story tray, tab bar, headers, dividers).
-           */
-          function cardIdOf(el) {
-            if (!el || el.nodeType !== 1) return '';
-            var keys = ['data-video-id', 'data-successful-render-id',
-                        'data-tracking-duration-id', 'data-comp-id'];
-            for (var i = 0; i < keys.length; i++) {
-              var v = el.getAttribute && el.getAttribute(keys[i]);
-              if (v) return keys[i] + ':' + v;
-            }
-            var a = el.querySelector &&
-                    el.querySelector('a[href*="/posts/"],a[href*="/reel/"],' +
-                                     'a[href*="story_fbid"],a[href*="/videos/"]');
-            if (a) return 'href:' + a.getAttribute('href');
-            return '';
-          }
-
           function inject() {
-            try {
-              var box = feedContainer();
-              if (!box || box.getAttribute('data-db-offline')) return;
-              box.setAttribute('data-db-offline', '1');
+            var box = feedContainer();
+            if (!box || box.getAttribute('data-db-offline')) return;
+            box.setAttribute('data-db-offline', '1');
 
-              // Append the saved cards FIRST. If anything below fails, the
-              // page still shows the document's own content — the offline
-              // page can never be left blank by this script.
-              var holder = document.createElement('div');
-              holder.setAttribute('data-db-cards', '1');
-              holder.innerHTML = CARDS;
-              box.appendChild(holder);
-
-              // The stored document carries its own copy of the first page —
-              // the same posts the capture saved. Remove only the cards whose
-              // id is exactly one of the saved ids (an exact duplicate of
-              // what was just appended), plus pure skeleton placeholders.
-              // Everything else — composer, story tray, tabs, headers,
-              // dividers, and any card we do not hold — is left untouched.
-              var kids = Array.prototype.slice.call(box.children);
-              for (var i = 0; i < kids.length; i++) {
-                var k = kids[i];
-                if (k === holder) continue;
-                if (isPlaceholder(k)) {
-                  try { k.parentNode.removeChild(k); } catch (e) {}
-                  continue;
-                }
-                var id = cardIdOf(k);
-                if (id && SAVED[id]) {
-                  try { k.parentNode.removeChild(k); } catch (e) {}
-                }
+            var kids = Array.prototype.slice.call(box.children);
+            for (var i = 0; i < kids.length; i++) {
+              if (isPlaceholder(kids[i])) {
+                try { kids[i].parentNode.removeChild(kids[i]); } catch (e) {}
               }
-
-              // Facebook's feed scroller is a fixed-height window that hides
-              // what overflows it; the saved cards appended beyond it were
-              // unreachable — the reported handful of posts instead of the
-              // hundreds that were saved. Un-clip the page so every saved
-              // card is reachable by scrolling. Heights are not touched:
-              // the page's own layout (fixed header, full-screen reels)
-              // keeps its sizes.
-              document.documentElement.style.overflowY = 'auto';
-              document.body.style.overflowY = 'auto';
-              if (box !== document.body) {
-                box.style.overflowY = 'auto';
-              }
-
-              doResume(box);
-            } catch (e) {
-              // Never let a failure blank the page.
             }
+
+            var holder = document.createElement('div');
+            holder.setAttribute('data-db-cards', '1');
+            holder.innerHTML = CARDS;
+            box.appendChild(holder);
+
+            // Facebook's feed scroller is a fixed-height window that hides
+            // what overflows it; the saved cards appended beyond it were
+            // unreachable - the reported handful of posts instead of the
+            // hundreds that were saved. Un-clip the page so every saved
+            // card is reachable by scrolling. Heights are not touched: the
+            // page's own layout keeps its sizes.
+            document.documentElement.style.overflowY = 'auto';
+            document.body.style.overflowY = 'auto';
+            if (box !== document.body) {
+              box.style.overflowY = 'auto';
+            }
+
+            doResume(box);
           }
 
           function doResume(box) {
