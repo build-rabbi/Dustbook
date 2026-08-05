@@ -211,7 +211,15 @@ object OfflineDocs {
         val f = fileFor(screen) ?: return null
 
         if (!f.exists() || f.length() == 0L) {
-            return shellFor(screen)
+            // No stored document, but there may still be saved cards.
+            val section = when (screen) {
+                "reels", "watch" -> OfflineFeed.SECTION_REELS
+                "stories" -> OfflineFeed.SECTION_STORIES
+                "home" -> OfflineFeed.SECTION_FEED
+                else -> null
+            }
+            val cards = section?.let { OfflineFeed.cardsHtml(it) } ?: ""
+            return shellFor(screen, cards, "")
         }
 
         // The built cache is invalidated only when the store changes, so a
@@ -232,34 +240,27 @@ object OfflineDocs {
                 else -> null
             }
             val cards = section?.let { OfflineFeed.cardsHtml(it) } ?: ""
-            // The ids of the cards being injected, so the injector can
-            // remove the document's own copy of the same posts (exact
-            // duplicates only — never on a guess).
-            val savedIds = section?.let { s ->
-                OfflineFeed.realPlayableItems(s).map { it.id }
-            } ?: emptyList()
 
-            // Resume position, so the user picks up where they left off
-            // instead of scrolling from the top every time.
-            val resumeId = when (screen) {
-                "reels", "watch" -> appContext?.let { Prefs(it).offlineResumeReel }
-                "stories" -> appContext?.let { Prefs(it).offlineResumeStories }
-                "home" -> appContext?.let { Prefs(it).offlineResumeFeed }
-                else -> null
+            // Saved content wins over the stored skeleton. The skeleton's
+            // own scripts are dead offline and its scroller is a
+            // fixed-height window that hides everything beyond it;
+            // injecting into it failed on real layouts (content flashed
+            // then vanished, reels never scrolled). Serve the saved cards
+            // in a plain page that reuses Facebook's own stylesheets from
+            // the stored document, so they look exactly as they did online
+            // and scroll naturally.
+            if (cards.isNotBlank()) {
+                val cssLinks = stylesheetLinks(f.readText())
+                return shellFor(screen, cards, cssLinks)
             }
 
+            // Nothing saved: serve the stored document untouched.
             val html = promoHideCss() +
                 f.readText() +
                 unmuteStripScript() +
                 offlineAdHideScript() +
                 OfflineBanner.html() +
                 "<script>" + OfflineNav.script(navigableScreens()) + "</script>" +
-                (if (cards.isNotBlank()) {
-                    "<script>" +
-                        (if (screen == "stories") storyViewer(cards.replace("\n", "\n---DBSTORY---\n"), resumeId)
-                         else OfflineInject.script(cards, resumeId, savedIds)) +
-                        "</script>"
-                } else "") +
                 if (screen == "reels" || screen == "watch" || screen == "stories") {
                     "<script>" + VideoHelper.getOfflineVideoAssistScript() + "</script>"
                 } else ""
@@ -413,18 +414,42 @@ object OfflineDocs {
 
 
     /**
-     * When no stored Facebook document exists but we have saved cards,
-     * build the lightest possible page that shows them instead of
-     * returning null (which would hand the request to a WebView with no
-     * connection — the raw ERR_INTERNET_DISCONNECTED page).
+     * Facebook's own stylesheet <link> tags from a stored document.
+     *
+     * The stored Facebook document references its real stylesheets on
+     * fbcdn.net; those files are already in the offline cache (the asset
+     * prefetch stores them), so the saved-cards page can reuse them and the
+     * cards look exactly as they did online.
      */
-    private fun shellFor(screen: String): WebResourceResponse? {
+    private fun stylesheetLinks(html: String): String {
+        if (html.isBlank()) return ""
+        val re = Regex(
+            """<link\b[^>]*\brel\s*=\s*["']stylesheet["'][^>]*>""",
+            RegexOption.IGNORE_CASE
+        )
+        return re.findAll(html)
+            .map { rewriteForOffline(it.value) }
+            .distinct()
+            .take(6)
+            .joinToString("\n")
+    }
+
+    /**
+     * The saved-cards page: every playable saved card in normal document
+     * flow, styled by Facebook's own stylesheets, so offline looks like
+     * online and everything scrolls naturally — nothing is hidden inside a
+     * dead skeleton's fixed-height scroller.
+     *
+     * This is the primary offline page whenever the store holds saved
+     * content, for home, reels and stories alike. The stored Facebook
+     * document is only served when there is nothing saved to show.
+     */
+    private fun shellFor(screen: String, cards: String, cssLinks: String): WebResourceResponse? {
         val section = when (screen) {
             "reels", "watch" -> OfflineFeed.SECTION_REELS
             "stories" -> OfflineFeed.SECTION_STORIES
             else -> OfflineFeed.SECTION_FEED
         }
-        val cards = OfflineFeed.cardsHtml(section)
         val use = if (cards.isNotBlank()) cards else
             listOf(OfflineFeed.SECTION_REELS, OfflineFeed.SECTION_FEED,
                    OfflineFeed.SECTION_STORIES)
@@ -432,13 +457,26 @@ object OfflineDocs {
                 OfflineFeed.cardsHtml(s).takeIf { it.isNotBlank() }
             } ?: return offlineFallbackPage()
 
+        // Cached like the document path; invalidated whenever the store
+        // changes, so a hit here is always fresh.
+        built[screen]?.let { b ->
+            return WebResourceResponse(
+                "text/html", "utf-8", 200, "OK",
+                mapOf("Cache-Control" to "no-store"),
+                b.bytes.inputStream()
+            )
+        }
+
         val html = "<!DOCTYPE html><html lang=\"en\"><head>" +
             "<meta charset=\"utf-8\"><meta name=\"viewport\" " +
-            "content=\"width=device-width,initial-scale=1,user-scalable=no\">" +
+            "content=\"width=device-width,initial-scale=1\">" +
+            cssLinks +
             "<style>body{margin:0;background:#18191a;color:#e4e6eb;" +
             "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto," +
-            "sans-serif}</style>" + promoHideCss() +
+            "sans-serif}img,video{max-width:100%}</style>" +
+            promoHideCss() +
             "</head><body><div>" + use + "</div>" +
+            offlineAdHideScript() +
             unmuteStripScript() +
             OfflineBanner.html() +
             "<script>" + OfflineNav.script(navigableScreens()) + "</script>" +
@@ -451,8 +489,10 @@ object OfflineDocs {
             } else "") +
             "</body></html>"
 
+        val b = html.toByteArray()
+        built[screen] = Built(b)
         return WebResourceResponse("text/html", "utf-8", 200, "OK",
-            mapOf("Cache-Control" to "no-store"), html.byteInputStream())
+            mapOf("Cache-Control" to "no-store"), b.inputStream())
     }
 
     /**
