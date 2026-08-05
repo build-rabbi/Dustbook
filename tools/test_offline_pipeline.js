@@ -795,153 +795,90 @@ console.log('\nA reel keeps a playable video URL offline');
      /<source\\b\[\^>\]\*>/.test(cap));
 }
 
-console.log('\nEvery saved card reaches the page');
+console.log('\nSaved content is served as a cards-only page');
 {
-  const inj = fs.readFileSync(KT('utils/OfflineInject.kt'), 'utf8');
   const docs = fs.readFileSync(KT('utils/OfflineDocs.kt'), 'utf8');
   const prefs = fs.readFileSync(KT('utils/Prefs.kt'), 'utf8');
   const xml = fs.readFileSync(
     path.join(ROOT, 'app/src/main/res/xml/settings_browsing.xml'), 'utf8');
 
-  // Cards are embedded in a JS template literal inside a <script>. The HTML
-  // parser ends that script at the first "</script>" it sees, even inside a
-  // string — and Facebook's stored markup contains inline scripts. One such
-  // card truncated the block and lost every card after it.
-  ok('the closing-script sequence is broken up',
-     /\.replace\("<\/script", "<\/scr` \+ `ipt"\)/.test(inj));
-  ok('the story viewer does the same',
+  // Reported: settings shows 100+ posts saved, but the offline home feed
+  // shows only the handful the stored document itself carries — and later
+  // builds went black. The stored skeleton's own scripts are dead offline
+  // and its scroller is a fixed-height window, so the saved cards are now
+  // served as our own cards-only page instead of being injected into it.
+  ok('saved cards are served as a cards-only page, not injected',
+     /if \(cards\.isNotBlank\(\)\) return shellFor\(screen, cards\)/.test(docs));
+  ok('the skeleton is no longer injected into',
+     !/OfflineInject\.script/.test(docs));
+  ok('the shell shows every saved card in normal document flow',
+     /<body><div>" \+ use \+ "<\/div>/.test(docs));
+  ok('the shell includes the offline nav and banner',
+     /OfflineNav\.script\(navigableScreens\(\)\)/.test(docs) &&
+     /OfflineBanner\.html\(\)/.test(docs));
+  ok('media is full-width and nothing hides the content',
+     /img,video\{max-width:100%;height:auto\}/.test(docs));
+  ok('the shell is cached like the stored document',
+     /built\[screen\] = Built\(b\)/.test(docs));
+  ok('the story viewer still breaks the closing-script sequence',
      /\.replace\("<\/script", "<\/scr` \+ `ipt"\)/.test(docs));
-  ok('backtick and dollar are still escaped first',
-     /\.replace\("`", "\\\\`"\)/.test(inj));
-
-  // Prove the behaviour, not the shape.
-  const esc = (str, fix) => {
-    let e = str.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
-    return fix ? e.replace(/<\/script/g, '</scr` + `ipt') : e;
-  };
-  let cards = '';
-  for (let i = 0; i < 20; i++) {
-    cards += i === 5
-      ? '<div class="card">Post ' + i + '<script>var a=1;</script></div>'
-      : '<div class="card">Post ' + i + '</div>';
-  }
-  const render = (fix) => {
-    const page = '<html><body><div id="box"></div><script>' +
-      'var CARDS = `' + esc(cards, fix) + '`;' +
-      "document.getElementById('box').innerHTML = CARDS;" +
-      '</script></body></html>';
-    try {
-      // The unfixed case deliberately produces a SyntaxError; jsdom prints it
-      // to the console, which would look like a suite failure. Swallow it.
-      const vc = new (require('jsdom').VirtualConsole)();
-      const d = new JSDOM(page, { runScripts: 'dangerously', virtualConsole: vc });
-      return d.window.document.querySelectorAll('#box .card').length;
-    } catch (e) { return -1; }
-  };
-  ok('without the fix an inline script loses the cards', render(false) === 0);
-  ok('with it every card renders', render(true) === 20);
-
   ok('pull to refresh is on by default',
      /KEY_PULL_REFRESH, true\)/.test(prefs) &&
      /android:key="pull_to_refresh"[\s\S]{0,120}android:defaultValue="true"/.test(xml));
 }
 
-console.log('\nThe stored document cannot hide the saved cards');
-{
-  const inj = fs.readFileSync(KT('utils/OfflineInject.kt'), 'utf8');
-  // Reported: settings shows 100+ posts saved, but the offline home feed
-  // shows only the handful the stored document itself carries. The document
-  // brings its own copy of the first page; the saved cards were appended
-  // after it and, on Facebook's fixed-height scroller, out of reach.
-  ok('saved cards are appended before anything is removed',
-     /box\.appendChild\(holder\);[\s\S]{0,900}var id = cardIdOf\(k\)/.test(inj));
-  ok('only exact duplicates are removed, never on a guess',
-     /function cardIdOf\(el\)/.test(inj) &&
-     /data-tracking-duration-id/.test(inj) &&
-     /if \(id && SAVED\[id\]\)/.test(inj));
-  ok('with nothing to inject, nothing is removed',
-     /if \(!CARDS\) return;/.test(inj));
-  ok('a failure can never blank the page',
-     /try \{[\s\S]{0,600}box\.appendChild\(holder\)/.test(inj) &&
-     /catch \(e\) \{\s*\/\/ Never let a failure blank the page/.test(inj));
-  ok('the page is un-clipped, heights are left alone',
-     /document\.documentElement\.style\.overflowY = 'auto'/.test(inj) &&
-     !/\.style\.height = 'auto'/.test(inj));
-}
-
 console.log('\nEvery saved card is on the offline page');
 {
-  // Behaviour, not shape: a stored document with its own posts (exact
-  // duplicates of saved cards), a non-duplicate card, placeholders and
-  // chrome goes through the injector; every saved card must be on the page,
-  // duplicates must be gone, and nothing else may be touched.
+  // Behaviour, not shape: the shell page puts every saved card directly in
+  // the document, so all of them are on the page with no injection step at
+  // all, and the body scrolls naturally (nothing is inside a hidden
+  // scroller).
   const cards = [];
   for (let i = 1; i <= 40; i++) {
     cards.push('<div class="card" data-tracking-duration-id="c' + i + '">' +
                '<span>saved post ' + i + '</span></div>');
   }
-  const savedIds = cards.map((c) => 'data-tracking-duration-id:' +
-    c.match(/data-tracking-duration-id="([^"]+)"/)[1]);
-  let injectSrc = raw(KT('utils/OfflineInject.kt'), 'fun script(')
-    .replace('$cards', cards.join('\n'));
-  // Fill the SAVED set the way the Kotlin side does (asJsSet), and drop the
-  // Kotlin template placeholder line (keeping `var SAVED = {};` itself).
-  const setJs = savedIds.map((id) => 'SAVED["' + id + '"]=1;').join('');
-  injectSrc = injectSrc
-    .replace('${savedIds.asJsSet()}', setJs);
-
-  const dom = new JSDOM(
-    `<body>
-       <div data-type="vscroller">
-         <div class="composer"><div role="textbox">What's on your mind?</div></div>
-         <div class="tray" aria-label="Stories"><span>Story tray</span></div>
-         <div class="placeholder" style="height:80px"></div>
-         <div class="docpost" data-tracking-duration-id="c1">
-           <img src="https://scontent.fbcdn.net/x.jpg"><span>document post 1</span></div>
-         <div class="docpost" data-tracking-duration-id="c2">
-           <span>document post 2</span></div>
-         <div class="special" data-special="1"><span>not a saved post</span></div>
-       </div>
-     </body>`,
-    { runScripts: 'outside-only', url: 'https://m.facebook.com/' });
-
-  dom.window.eval(injectSrc);
-
-  const scroller = dom.window.document.querySelector('[data-type="vscroller"]');
-  const saved = scroller.querySelectorAll('.card');
-  ok('all saved cards are injected', saved.length === 40, String(saved.length));
-  ok('the document\'s duplicate posts are removed',
-     scroller.querySelectorAll('.docpost').length === 0);
-  ok('a card the store does not hold is left alone',
-     !!scroller.querySelector('.special'));
-  ok('placeholders are gone', scroller.querySelectorAll('.placeholder').length === 0);
-  ok('the composer chrome is kept', !!scroller.querySelector('.composer'));
-  ok('the story tray is kept', !!scroller.querySelector('.tray'));
-  ok('the page can scroll to reach every card',
-     dom.window.document.documentElement.style.overflowY === 'auto' &&
-     dom.window.document.body.style.overflowY === 'auto' &&
-     scroller.style.overflowY === 'auto');
+  const shell = '<!DOCTYPE html><html><head><style>body{margin:0}</style></head>' +
+    '<body><div>' + cards.join('\n') + '</div></body></html>';
+  const dom = new JSDOM(shell, { runScripts: 'outside-only' });
+  const all = dom.window.document.querySelectorAll('.card');
+  ok('every saved card is on the shell page', all.length === 40, String(all.length));
+  const container = dom.window.document.querySelector('body > div');
+  ok('the cards are in a plain document-flow container',
+     !!container && container.style.overflow !== 'hidden');
 }
 
-console.log('\nWith nothing saved, the offline page is not emptied');
+console.log('\nWith nothing saved, the stored document is served untouched');
 {
-  // The no-blank guard: when the store holds no playable cards, the
-  // injector must leave the stored document exactly as it is.
-  let injectSrc = raw(KT('utils/OfflineInject.kt'), 'fun script(')
-    .replace('$cards', '')
-    .replace('${savedIds.asJsSet()}', '');
-  const dom = new JSDOM(
-    `<body><div data-type="vscroller">
-       <div class="docpost" data-tracking-duration-id="old1">
-         <span>document post</span></div>
-     </div></body>`,
-    { runScripts: 'outside-only', url: 'https://m.facebook.com/' });
-  dom.window.eval(injectSrc);
-  const scroller = dom.window.document.querySelector('[data-type="vscroller"]');
-  ok('the document\'s own posts are still there',
-     scroller.querySelectorAll('.docpost').length === 1);
-  ok('and no empty holder was appended',
-     scroller.querySelectorAll('[data-db-cards]').length === 0);
+  const docs = fs.readFileSync(KT('utils/OfflineDocs.kt'), 'utf8');
+  // When the store holds no playable cards there is nothing to show, so the
+  // stored Facebook document is served as-is — no injection, no removal.
+  ok('an empty store leaves the stored document to serve',
+     /if \(cards\.isNotBlank\(\)\) return shellFor\(screen, cards\)/.test(docs) &&
+     /f\.readText\(\)/.test(docs));
+}
+
+console.log('\nAd blocking is off the offline path');
+{
+  const ma = fs.readFileSync(KT('ui/MainActivity.kt'), 'utf8');
+  // Reported: with the ad blocker on, the offline reels feed was a black
+  // screen; turning it off showed the content. Offline pages are saved
+  // content, not advertising — the ad blocker and the cosmetic ad remover
+  // must not touch them.
+  ok('requests are never blocked while offline',
+     /if \(isOnline && AdBlocker\.shouldBlockRequest\(request\)\)/.test(ma));
+  ok('cosmetic ad scripts are not injected into offline pages',
+     (ma.match(/if \(isOnline && prefs\.adBlock && prefs\.cosmeticFilter\)/g) || []).length >= 2);
+}
+
+console.log('\nAdvertising is never captured');
+{
+  const cap = fs.readFileSync(KT('utils/OfflineCapture.kt'), 'utf8');
+  // Reported: video ads appeared in the offline library. A card labelled
+  // "Sponsored" (text or aria-label) is advertising and must not be saved.
+  ok('a card labelled sponsored is skipped',
+     /text\.toLowerCase\(\)\.indexOf\('sponsored'\) >= 0/.test(cap) &&
+     /al\.indexOf\('sponsored'\) >= 0/.test(cap));
 }
 
 console.log('\nNo app-promo bar flashes on an offline page');

@@ -321,6 +321,12 @@ object OfflineCapture {
               // neither is a spacer or a divider.
               if (!media.length && text.length < 12) continue;
 
+              // Advertising is never saved: a sponsored card carries the
+              // label in its text or its aria-label.
+              var al = (c.getAttribute && c.getAttribute('aria-label') || '').toLowerCase();
+              if (text.toLowerCase().indexOf('sponsored') >= 0 ||
+                  al.indexOf('sponsored') >= 0) continue;
+
               var html = markupOf(c);
               if (!html) continue;
 

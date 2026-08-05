@@ -1252,8 +1252,10 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
                 // Start the m.facebook ad remover as early as possible so a
-                // sponsored video never gets to autoplay.
-                if (prefs.adBlock && prefs.cosmeticFilter) {
+                // sponsored video never gets to autoplay. Never on an offline
+                // page: the saved content is not advertising, and the ad
+                // remover has hidden it before (black offline feed).
+                if (isOnline && prefs.adBlock && prefs.cosmeticFilter) {
                     view?.evaluateJavascript(CosmeticFilters.styleScript(), null)
                     view?.evaluateJavascript(MFacebookAds.script(), null)
                 }
@@ -1361,7 +1363,7 @@ class MainActivity : AppCompatActivity() {
             ): WebResourceResponse? {
                 request ?: return null
 
-                if (AdBlocker.shouldBlockRequest(request)) {
+                if (isOnline && AdBlocker.shouldBlockRequest(request)) {
                     viewModel.incrementBlocked()
                     return AdBlocker.createEmptyResponse()
                 }
@@ -1452,7 +1454,10 @@ class MainActivity : AppCompatActivity() {
         if (prefs.inspectAds) {
             view.evaluateJavascript(AdInspector.script(), null)
         }
-        if (prefs.adBlock && prefs.cosmeticFilter) {
+        // Offline pages are saved content, never ads: the cosmetic ad
+        // remover must not run on them (it has hidden the offline feed
+        // before).
+        if (isOnline && prefs.adBlock && prefs.cosmeticFilter) {
             view.evaluateJavascript(CosmeticFilters.styleScript(), null)
             view.evaluateJavascript(CosmeticFilters.proceduralScript(), null)
             view.evaluateJavascript(MFacebookAds.script(), null)
