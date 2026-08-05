@@ -407,7 +407,7 @@ console.log('\nOffline never falls through to the browser');
   // A page of our own around the cards is exactly what made offline look
   // different from online, so there is deliberately nothing to fall back to.
   ok('no page is invented when only cards are held',
-     /shellFor/.test(docs) && /OfflineFeed\.cardsHtml/.test(docs));
+     /cardsPage/.test(docs) && /OfflineFeed\.cardsHtml/.test(docs));
 
   // A restored session can land on a permalink or a profile, and nothing is
   // stored for those.
